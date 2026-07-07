@@ -43,10 +43,15 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add manifest.json
             if ! git diff --cached --quiet; then
-              git commit -m "chore: bump version to ${version} [skip ci]"
+              git commit -m "chore: bump version to ${version}"
             fi
             git tag "$tag"
-            git push origin HEAD:main --tags
+            # Push only the tag. main is protected (PRs only), so pushing the
+            # bump commit there fails the whole run. The version is always
+            # derived from the latest tag, and the tag's commit carries the
+            # bumped manifest, so the released manifest-*.json stays correct
+            # even though main's manifest.json is never rewritten.
+            git push origin "refs/tags/${tag}"
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
