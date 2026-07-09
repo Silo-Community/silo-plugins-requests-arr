@@ -8,7 +8,7 @@ import (
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 
-	"github.com/Silo-Server/silo-plugins-requests-arr/internal/arr"
+	"github.com/Silo-Community/silo-plugins-requests-arr/internal/arr"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 

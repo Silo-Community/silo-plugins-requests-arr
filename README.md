@@ -1,4 +1,4 @@
-# silo-plugin-requests-arr
+# Silo Requests: Sonarr / Radarr
 
 A Silo host plugin that fulfills Silo content requests (movies and series)
 against one or more Sonarr/Radarr instances. It implements the
@@ -19,10 +19,18 @@ make build
 This produces a `plugin` binary. Use `make build-all` to cross-compile the
 release matrix (linux/amd64, linux/arm64, darwin/arm64) into `dist/`.
 
-## Development note
+## Community maintenance
 
-The SDK dependency currently resolves through a machine-local `replace`
-directive in `go.mod` pointing at a side-by-side checkout of
-`silo-plugin-sdk`. Before release, swap this for a published, versioned
-`github.com/Silo-Server/silo-plugin-sdk` require (CI rejects committed local
-`replace` directives).
+This is an approved community plugin maintained in the
+[`Silo-Community`](https://github.com/Silo-Community) organization. Use
+[GitHub Issues](https://github.com/Silo-Community/silo-plugins-requests-arr/issues)
+for support and bug reports. Security reports should follow
+[`SECURITY.md`](SECURITY.md).
+
+The plugin consumes the published
+[`silo-plugin-sdk`](https://github.com/Silo-Server/silo-plugin-sdk); CI rejects
+machine-local SDK replacement directives.
+
+## License
+
+Licensed under AGPL-3.0. See [`LICENSE`](LICENSE).

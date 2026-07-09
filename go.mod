@@ -1,4 +1,4 @@
-module github.com/Silo-Server/silo-plugins-requests-arr
+module github.com/Silo-Community/silo-plugins-requests-arr
 
 go 1.26.3
 

@@ -22,8 +22,8 @@ jobs:
       - name: Configure module resolution
         run: |
           go env -w GOPROXY=direct
-          go env -w GOPRIVATE=github.com/Silo-Server/*
-          go env -w GONOSUMDB=github.com/Silo-Server/*
+          go env -w GOPRIVATE=github.com/Silo-Server/*,github.com/Silo-Community/*
+          go env -w GONOSUMDB=github.com/Silo-Server/*,github.com/Silo-Community/*
 
       - name: Reject committed local SDK replaces
         run: |
