@@ -7,7 +7,7 @@ import (
 
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtime"
 
-	"github.com/Silo-Server/silo-plugins-requests-arr/internal/router"
+	"github.com/Silo-Community/silo-plugins-requests-arr/internal/router"
 )
 
 var version string
