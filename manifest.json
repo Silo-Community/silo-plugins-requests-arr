@@ -3,6 +3,19 @@
   "version": "0.1.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
+  "presentation": {
+    "display_name": "Sonarr & Radarr Requests",
+    "summary": "Route movie and series requests to one or more Sonarr and Radarr instances.",
+    "description_markdown": "Fulfills approved Silo requests directly through Sonarr and Radarr. Multiple connections can cover HD and 4K libraries, different root folders and quality profiles, tags, search behavior, and dedicated anime overrides.",
+    "setup_markdown": "Install the plugin, then add Sonarr and Radarr connections in Silo with each service URL and API key. Configure the root folder, quality profile, tags, default and 4K roles, and any anime overrides for each connection. The plugin is stateless; Silo supplies credentials for every request.",
+    "homepage_url": "https://github.com/Silo-Community/silo-plugins-requests-arr",
+    "source_url": "https://github.com/Silo-Community/silo-plugins-requests-arr",
+    "support_url": "https://github.com/Silo-Community/silo-plugins-requests-arr/issues",
+    "changelog_url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases",
+    "publisher_name": "Silo Community",
+    "publisher_url": "https://github.com/Silo-Community",
+    "license_spdx": "AGPL-3.0-only"
+  },
   "supported_platforms": [
     {
       "os": "linux",
