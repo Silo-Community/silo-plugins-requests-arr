@@ -33,6 +33,14 @@ type addMovieOptions struct {
 	Monitor        string `json:"monitor,omitempty"`
 }
 
+// movieStatusResource is the subset of Radarr's MovieResource needed to decide
+// whether a movie is fulfilled. It is a separate type from movieResource so the
+// add payload does not grow read-only fields.
+type movieStatusResource struct {
+	ID      int  `json:"id,omitempty"`
+	HasFile bool `json:"hasFile"`
+}
+
 func NewRadarrClient(httpClient *http.Client) *RadarrClient {
 	return &RadarrClient{httpClient: httpClient}
 }
@@ -132,8 +140,35 @@ func (c *RadarrClient) CheckMovieStatus(ctx context.Context, req Request, integr
 	if err != nil {
 		return FulfillmentStatus{}, err
 	}
+	// An imported movie leaves Radarr's queue entirely, so an empty queue is
+	// ambiguous: either nothing was ever grabbed, or the download finished and
+	// was imported. Only the movie record separates the two. Without this the
+	// queue evaluation reports "queued" for a fulfilled request forever, and the
+	// host never sees a target reach a terminal state.
+	if len(queues) == 0 {
+		movie, err := c.movieByID(ctx, client, movieID)
+		if err != nil {
+			return FulfillmentStatus{}, err
+		}
+		if movie.HasFile {
+			return FulfillmentStatus{
+				Status:          StatusCompleted,
+				IntegrationKind: "radarr",
+				ExternalID:      strconv.Itoa(movieID),
+				ExternalStatus:  "imported",
+			}, nil
+		}
+	}
 	evaluation := EvaluateQueue(queues)
 	return StatusFromQueueEvaluation("radarr", movieID, evaluation), nil
+}
+
+func (c *RadarrClient) movieByID(ctx context.Context, client *httpclient.Client, movieID int) (movieStatusResource, error) {
+	var movie movieStatusResource
+	if err := client.GetJSON(ctx, "/api/v3/movie/"+strconv.Itoa(movieID), &movie); err != nil {
+		return movieStatusResource{}, err
+	}
+	return movie, nil
 }
 
 func (c *RadarrClient) lookupMovie(ctx context.Context, client *httpclient.Client, tmdbID int) (movieResource, error) {

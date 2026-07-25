@@ -184,6 +184,91 @@ func TestCheckSeriesStatusReadsQueueDetails(t *testing.T) {
 	}
 }
 
+// Every aired, monitored episode on disk with an empty queue means fulfilled.
+func TestCheckSeriesStatusCompletesWhenFullyImported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/queue/details":
+			w.Write([]byte(`[]`))
+		case "/api/v3/series/24":
+			w.Write([]byte(`{"id":24,"statistics":{"episodeCount":10,"episodeFileCount":10}}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSonarrClient(server.Client())
+	status, err := client.CheckSeriesStatus(context.Background(), Request{
+		MediaType:  MediaTypeSeries,
+		TMDBID:     1399,
+		ExternalID: "24",
+	}, Instance{Kind: "sonarr", BaseURL: server.URL, APIKeyRef: "sonarr-key"})
+	if err != nil {
+		t.Fatalf("CheckSeriesStatus returned error: %v", err)
+	}
+	if status.Status != StatusCompleted || status.ExternalStatus != "imported" {
+		t.Fatalf("status = %+v, want completed/imported", status)
+	}
+}
+
+// The queue empties between grabs, so a partially-downloaded series must not
+// complete — that would strand the remaining episodes.
+func TestCheckSeriesStatusStaysQueuedWhenPartiallyImported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/queue/details":
+			w.Write([]byte(`[]`))
+		case "/api/v3/series/24":
+			w.Write([]byte(`{"id":24,"statistics":{"episodeCount":10,"episodeFileCount":4}}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSonarrClient(server.Client())
+	status, err := client.CheckSeriesStatus(context.Background(), Request{
+		MediaType:  MediaTypeSeries,
+		TMDBID:     1399,
+		ExternalID: "24",
+	}, Instance{Kind: "sonarr", BaseURL: server.URL, APIKeyRef: "sonarr-key"})
+	if err != nil {
+		t.Fatalf("CheckSeriesStatus returned error: %v", err)
+	}
+	if status.Status != StatusQueued || status.ExternalStatus != "not_in_queue" {
+		t.Fatalf("status = %+v, want queued/not_in_queue", status)
+	}
+}
+
+// A freshly added series reports zero aired episodes; that is not completion.
+func TestCheckSeriesStatusStaysQueuedWithNoEpisodes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/queue/details":
+			w.Write([]byte(`[]`))
+		case "/api/v3/series/24":
+			w.Write([]byte(`{"id":24,"statistics":{"episodeCount":0,"episodeFileCount":0}}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSonarrClient(server.Client())
+	status, err := client.CheckSeriesStatus(context.Background(), Request{
+		MediaType:  MediaTypeSeries,
+		TMDBID:     1399,
+		ExternalID: "24",
+	}, Instance{Kind: "sonarr", BaseURL: server.URL, APIKeyRef: "sonarr-key"})
+	if err != nil {
+		t.Fatalf("CheckSeriesStatus returned error: %v", err)
+	}
+	if status.Status != StatusQueued {
+		t.Fatalf("status = %+v, want queued", status)
+	}
+}
+
 func TestListSeriesIntegrationOptionsLoadsChoices(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Api-Key"); got != "sonarr-key" {
