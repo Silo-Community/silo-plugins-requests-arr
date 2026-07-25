@@ -35,6 +35,21 @@ type addSeriesOptions struct {
 	SearchForCutoffUnmetEpisodes bool   `json:"searchForCutoffUnmetEpisodes,omitempty"`
 }
 
+// seriesStatusResource is the subset of Sonarr's SeriesResource needed to decide
+// whether a series is fulfilled. Kept separate from seriesResource so the add
+// payload does not grow read-only fields.
+type seriesStatusResource struct {
+	ID         int                    `json:"id,omitempty"`
+	Statistics seriesStatisticsSubset `json:"statistics"`
+}
+
+type seriesStatisticsSubset struct {
+	// EpisodeCount counts only episodes that have aired and are monitored, so it
+	// does not grow with an ongoing show's unaired episodes.
+	EpisodeCount     int `json:"episodeCount"`
+	EpisodeFileCount int `json:"episodeFileCount"`
+}
+
 func NewSonarrClient(httpClient *http.Client) *SonarrClient {
 	return &SonarrClient{httpClient: httpClient}
 }
@@ -139,8 +154,37 @@ func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integ
 	if err != nil {
 		return FulfillmentStatus{}, err
 	}
+	// Imported episodes leave Sonarr's queue, so an empty queue alone cannot say
+	// whether the series was fulfilled — see the equivalent note in
+	// RadarrClient.CheckMovieStatus. A series has no hasFile, so the closest
+	// analogue is "every aired, monitored episode is on disk". Anything short of
+	// that stays queued: the queue goes briefly empty between grabs, and
+	// completing there would strand a half-downloaded series.
+	if len(queues) == 0 {
+		series, err := c.seriesByID(ctx, client, seriesID)
+		if err != nil {
+			return FulfillmentStatus{}, err
+		}
+		stats := series.Statistics
+		if stats.EpisodeCount > 0 && stats.EpisodeFileCount >= stats.EpisodeCount {
+			return FulfillmentStatus{
+				Status:          StatusCompleted,
+				IntegrationKind: "sonarr",
+				ExternalID:      strconv.Itoa(seriesID),
+				ExternalStatus:  "imported",
+			}, nil
+		}
+	}
 	evaluation := EvaluateQueue(queues)
 	return StatusFromQueueEvaluation("sonarr", seriesID, evaluation), nil
+}
+
+func (c *SonarrClient) seriesByID(ctx context.Context, client *httpclient.Client, seriesID int) (seriesStatusResource, error) {
+	var series seriesStatusResource
+	if err := client.GetJSON(ctx, "/api/v3/series/"+strconv.Itoa(seriesID), &series); err != nil {
+		return seriesStatusResource{}, err
+	}
+	return series, nil
 }
 
 func (c *SonarrClient) lookupSeries(ctx context.Context, client *httpclient.Client, tvdbID int) (seriesResource, error) {

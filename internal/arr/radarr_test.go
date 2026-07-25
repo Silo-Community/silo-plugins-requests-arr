@@ -192,6 +192,94 @@ func TestCheckMovieStatusReadsQueueDetails(t *testing.T) {
 	}
 }
 
+// An imported movie is gone from the queue, so an empty queue plus hasFile is
+// the only signal that the request was actually fulfilled.
+func TestCheckMovieStatusCompletesWhenImported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/queue/details":
+			w.Write([]byte(`[]`))
+		case "/api/v3/movie/42":
+			w.Write([]byte(`{"id":42,"hasFile":true}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewRadarrClient(server.Client())
+	status, err := client.CheckMovieStatus(context.Background(), Request{
+		MediaType:  MediaTypeMovie,
+		TMDBID:     550,
+		ExternalID: "42",
+	}, Instance{
+		Kind:      "radarr",
+		BaseURL:   server.URL,
+		APIKeyRef: "radarr-key",
+	})
+	if err != nil {
+		t.Fatalf("CheckMovieStatus returned error: %v", err)
+	}
+	if status.Status != StatusCompleted || status.ExternalStatus != "imported" {
+		t.Fatalf("status = %+v, want completed/imported", status)
+	}
+	if status.ExternalID != "42" {
+		t.Fatalf("ExternalID = %q, want 42", status.ExternalID)
+	}
+}
+
+// An empty queue with no file means nothing was grabbed yet — still queued.
+func TestCheckMovieStatusStaysQueuedWithoutFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/queue/details":
+			w.Write([]byte(`[]`))
+		case "/api/v3/movie/42":
+			w.Write([]byte(`{"id":42,"hasFile":false}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewRadarrClient(server.Client())
+	status, err := client.CheckMovieStatus(context.Background(), Request{
+		MediaType:  MediaTypeMovie,
+		TMDBID:     550,
+		ExternalID: "42",
+	}, Instance{Kind: "radarr", BaseURL: server.URL, APIKeyRef: "radarr-key"})
+	if err != nil {
+		t.Fatalf("CheckMovieStatus returned error: %v", err)
+	}
+	if status.Status != StatusQueued || status.ExternalStatus != "not_in_queue" {
+		t.Fatalf("status = %+v, want queued/not_in_queue", status)
+	}
+}
+
+// A non-empty queue is authoritative; the movie record is not fetched at all.
+func TestCheckMovieStatusSkipsMovieLookupWhileQueued(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/queue/details" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.Write([]byte(`[{"movieId":42,"status":"queued"}]`))
+	}))
+	defer server.Close()
+
+	client := NewRadarrClient(server.Client())
+	status, err := client.CheckMovieStatus(context.Background(), Request{
+		MediaType:  MediaTypeMovie,
+		TMDBID:     550,
+		ExternalID: "42",
+	}, Instance{Kind: "radarr", BaseURL: server.URL, APIKeyRef: "radarr-key"})
+	if err != nil {
+		t.Fatalf("CheckMovieStatus returned error: %v", err)
+	}
+	if status.Status != StatusQueued {
+		t.Fatalf("status = %+v, want queued", status)
+	}
+}
+
 func TestListMovieIntegrationOptionsLoadsChoices(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Api-Key"); got != "radarr-key" {
