@@ -2,8 +2,11 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sync"
 	"testing"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
@@ -17,53 +20,100 @@ func sibConn(id string, cfg map[string]any) *pluginv1.RouterConnection {
 	return &pluginv1.RouterConnection{Id: id, Config: s}
 }
 
-func TestValidateRejectsSecondHDDefaultSameKind(t *testing.T) {
-	resp, err := (&Server{}).Validate(context.Background(), &pluginv1.ValidateRequest{
-		CapabilityId: "arr",
-		Connection:   sibConn("c2", map[string]any{"service_kind": "radarr", "is_default": true}),
-		Siblings:     []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "radarr", "is_default": true})},
-	})
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
+func TestValidateCharacterizesNormalDefaultRules(t *testing.T) {
+	cases := []struct {
+		name       string
+		connection *pluginv1.RouterConnection
+		siblings   []*pluginv1.RouterConnection
+		want       map[string]string
+	}{
+		{
+			name:       "rejects HD default on 4K instance",
+			connection: sibConn("c1", map[string]any{"service_kind": "radarr", "is_default": true, "is_4k": true}),
+			want:       map[string]string{"is_default": "the HD default cannot be a 4K server"},
+		},
+		{
+			name:       "rejects 4K default on HD instance",
+			connection: sibConn("c1", map[string]any{"service_kind": "radarr", "is_default_4k": true}),
+			want:       map[string]string{"is_default_4k": "the 4K default must be a 4K server"},
+		},
+		{
+			name:       "rejects second normal HD default of same kind",
+			connection: sibConn("c2", map[string]any{"service_kind": "radarr", "is_default": true}),
+			siblings:   []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "radarr", "is_default": true})},
+			want:       map[string]string{"is_default": "radarr already has an HD default; unset it on the other connection first"},
+		},
+		{
+			name:       "rejects second normal 4K default of same kind",
+			connection: sibConn("c2", map[string]any{"service_kind": "radarr", "is_4k": true, "is_default_4k": true}),
+			siblings:   []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "radarr", "is_4k": true, "is_default_4k": true})},
+			want:       map[string]string{"is_default_4k": "radarr already has a 4K default; unset it on the other connection first"},
+		},
+		{
+			name:       "allows normal and anime HD roles on one HD instance",
+			connection: sibConn("c1", map[string]any{"service_kind": "radarr", "is_default": true, "is_anime_default": true}),
+			want:       map[string]string{},
+		},
 	}
-	if resp.GetFieldErrors()["is_default"] == "" {
-		t.Fatalf("expected is_default conflict error, got %+v", resp.GetFieldErrors())
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := New().Validate(context.Background(), &pluginv1.ValidateRequest{
+				CapabilityId: "arr",
+				Connection:   tc.connection,
+				Siblings:     tc.siblings,
+			})
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if got := resp.GetFieldErrors(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("FieldErrors: want %#v got %#v", tc.want, got)
+			}
+		})
 	}
 }
 
-func TestValidateAllowsHDDefaultDifferentKind(t *testing.T) {
-	resp, _ := (&Server{}).Validate(context.Background(), &pluginv1.ValidateRequest{
-		CapabilityId: "arr",
-		Connection:   sibConn("c2", map[string]any{"service_kind": "radarr", "is_default": true}),
-		Siblings:     []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "sonarr", "is_default": true})},
-	})
-	if resp.GetFieldErrors()["is_default"] != "" {
-		t.Fatalf("different kind must not conflict, got %+v", resp.GetFieldErrors())
+func TestValidateAnimeDefaultRules(t *testing.T) {
+	cases := []struct {
+		name       string
+		connection *pluginv1.RouterConnection
+		siblings   []*pluginv1.RouterConnection
+		want       map[string]string
+	}{
+		{"rejects anime HD default on 4K instance", sibConn("c1", map[string]any{"service_kind": "radarr", "is_4k": true, "is_anime_default": true}), nil, map[string]string{"is_anime_default": "the anime HD default cannot be a 4K server"}},
+		{"rejects anime 4K default on HD instance", sibConn("c1", map[string]any{"service_kind": "radarr", "is_anime_default_4k": true}), nil, map[string]string{"is_anime_default_4k": "the anime 4K default must be a 4K server"}},
+		{"rejects second anime HD default of same kind", sibConn("c2", map[string]any{"service_kind": "radarr", "is_anime_default": true}), []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "radarr", "is_anime_default": true})}, map[string]string{"is_anime_default": "radarr already has an anime HD default; unset it on the other connection first"}},
+		{"rejects second anime 4K default of same kind", sibConn("c2", map[string]any{"service_kind": "sonarr", "is_4k": true, "is_anime_default_4k": true}), []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "sonarr", "is_4k": true, "is_anime_default_4k": true})}, map[string]string{"is_anime_default_4k": "sonarr already has an anime 4K default; unset it on the other connection first"}},
+		{"allows anime role across kinds", sibConn("c2", map[string]any{"service_kind": "radarr", "is_anime_default": true}), []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "sonarr", "is_anime_default": true})}, map[string]string{}},
+		{"allows valid anime HD assignment", sibConn("c1", map[string]any{"service_kind": "radarr", "is_anime_default": true}), nil, map[string]string{}},
+		{"allows normal and anime 4K roles on one 4K instance", sibConn("c1", map[string]any{"service_kind": "radarr", "is_4k": true, "is_default_4k": true, "is_anime_default_4k": true}), nil, map[string]string{}},
+		{"ignores config-less sibling", sibConn("c2", map[string]any{"service_kind": "radarr", "is_anime_default": true}), []*pluginv1.RouterConnection{{Id: "c1"}}, map[string]string{}},
+		{"ignores current connection in siblings", sibConn("c1", map[string]any{"service_kind": "radarr", "is_anime_default": true}), []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "radarr", "is_anime_default": true})}, map[string]string{}},
+		{"ignores malformed sibling fields", sibConn("c2", map[string]any{"service_kind": "radarr", "is_anime_default": true}), []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": false, "is_anime_default": "true"})}, map[string]string{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := New().Validate(context.Background(), &pluginv1.ValidateRequest{CapabilityId: "arr", Connection: tc.connection, Siblings: tc.siblings})
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if got := resp.GetFieldErrors(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("FieldErrors: want %#v got %#v", tc.want, got)
+			}
+		})
 	}
 }
 
-func TestValidateRejectsSecond4KDefaultSameKind(t *testing.T) {
-	resp, _ := (&Server{}).Validate(context.Background(), &pluginv1.ValidateRequest{
-		CapabilityId: "arr",
-		Connection:   sibConn("c2", map[string]any{"service_kind": "radarr", "is_4k": true, "is_default_4k": true}),
-		Siblings:     []*pluginv1.RouterConnection{sibConn("c1", map[string]any{"service_kind": "radarr", "is_4k": true, "is_default_4k": true})},
-	})
-	if resp.GetFieldErrors()["is_default_4k"] == "" {
-		t.Fatalf("expected is_default_4k conflict, got %+v", resp.GetFieldErrors())
+func TestValidateDoesNotRetainAnimeErrorsAcrossRequests(t *testing.T) {
+	server := New()
+	invalid, err := server.Validate(context.Background(), &pluginv1.ValidateRequest{Connection: sibConn("c1", map[string]any{"service_kind": "radarr", "is_4k": true, "is_anime_default": true})})
+	if err != nil || !reflect.DeepEqual(invalid.GetFieldErrors(), map[string]string{"is_anime_default": "the anime HD default cannot be a 4K server"}) {
+		t.Fatalf("invalid Validate: response=%#v err=%v", invalid, err)
 	}
-}
-
-func TestValidateToleratesSiblingWithoutConfig(t *testing.T) {
-	resp, err := (&Server{}).Validate(context.Background(), &pluginv1.ValidateRequest{
-		CapabilityId: "arr",
-		Connection:   sibConn("c2", map[string]any{"service_kind": "radarr", "is_default": true}),
-		Siblings:     []*pluginv1.RouterConnection{{Id: "c1"}},
-	})
-	if err != nil {
-		t.Fatalf("Validate must not error on a config-less sibling: %v", err)
-	}
-	if resp.GetFieldErrors()["is_default"] != "" {
-		t.Fatalf("a config-less sibling must not conflict, got %+v", resp.GetFieldErrors())
+	valid, err := server.Validate(context.Background(), &pluginv1.ValidateRequest{Connection: sibConn("c1", map[string]any{"service_kind": "radarr", "is_anime_default": true})})
+	if err != nil || len(valid.GetFieldErrors()) != 0 {
+		t.Fatalf("valid Validate: response=%#v err=%v", valid, err)
 	}
 }
 
@@ -147,36 +197,188 @@ func TestFulfillNoMatchingInstance(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsHDDefaultThatIsAlso4K(t *testing.T) {
-	cfg, _ := structpb.NewStruct(map[string]any{"service_kind": "radarr", "is_default": true, "is_4k": true})
-	resp, err := New().Validate(context.Background(), &pluginv1.ValidateRequest{
-		CapabilityId: "arr", Connection: &pluginv1.RouterConnection{Id: "c1", Config: cfg},
-	})
-	if err != nil {
-		t.Fatalf("Validate err: %v", err)
+type fulfillProbe struct {
+	mu          sync.Mutex
+	lookupCalls int
+	addCalls    int
+	body        map[string]any
+	server      *httptest.Server
+}
+
+func newFulfillProbe(t *testing.T, kind string) *fulfillProbe {
+	t.Helper()
+	p := &fulfillProbe{}
+	p.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lookupPath, addPath := "/api/v3/movie/lookup/tmdb", "/api/v3/movie"
+		lookupResponse, addResponse := `{"title":"Movie","tmdbId":42,"titleSlug":"movie"}`, `{"id":777,"tmdbId":42}`
+		if kind == "sonarr" {
+			lookupPath, addPath = "/api/v3/series/lookup", "/api/v3/series"
+			lookupResponse, addResponse = `[{"title":"Series","tvdbId":7,"titleSlug":"series"}]`, `{"id":888,"tvdbId":7}`
+		}
+		switch r.URL.Path {
+		case lookupPath:
+			if r.Method != http.MethodGet {
+				t.Errorf("%s lookup: want GET got %s", kind, r.Method)
+				http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+				return
+			}
+			p.mu.Lock()
+			p.lookupCalls++
+			p.mu.Unlock()
+			_, _ = w.Write([]byte(lookupResponse))
+		case addPath:
+			if r.Method != http.MethodPost {
+				t.Errorf("%s add: want POST got %s", kind, r.Method)
+				http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+				return
+			}
+			body := map[string]any{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode %s add body: %v", kind, err)
+				http.Error(w, "invalid add body", http.StatusBadRequest)
+				return
+			}
+			p.mu.Lock()
+			p.addCalls++
+			p.body = body
+			p.mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(addResponse))
+		default:
+			t.Errorf("unexpected %s request: %s %s", kind, r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	return p
+}
+
+func (p *fulfillProbe) connection(id string, config map[string]any) *pluginv1.RouterConnection {
+	conn := sibConn(id, config)
+	conn.BaseUrl = p.server.URL
+	conn.ApiKey = "test-key"
+	return conn
+}
+
+func (p *fulfillProbe) snapshot() (int, int, map[string]any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lookupCalls, p.addCalls, p.body
+}
+
+func TestFulfillRoutesAnimeToDedicatedARRInstance(t *testing.T) {
+	cases := []struct {
+		name       string
+		kind       string
+		mediaType  string
+		ids        map[string]string
+		wantFields map[string]any
+	}{
+		{"Radarr movie", "radarr", "movie", map[string]string{"tmdb": "42"}, map[string]any{"rootFolderPath": "/dedicated-anime", "qualityProfileId": float64(21), "tags": []any{float64(21), float64(22)}}},
+		{"Sonarr series", "sonarr", "series", map[string]string{"tvdb": "7"}, map[string]any{"seriesType": "anime"}},
 	}
-	if resp.GetFieldErrors()["is_default"] == "" && resp.GetFormError() == "" {
-		t.Fatal("expected a validation error for HD default that is also 4K")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			normal, anime := newFulfillProbe(t, tc.kind), newFulfillProbe(t, tc.kind)
+			defer normal.server.Close()
+			defer anime.server.Close()
+			normalConfig := map[string]any{"service_kind": tc.kind, "is_default": true, "root_folder": "/normal", "quality_profile_id": 1, "tags": []any{1}}
+			animeConfig := map[string]any{"service_kind": tc.kind, "is_anime_default": true, "root_folder": "/dedicated-standard", "quality_profile_id": 20, "tags": []any{20}}
+			if tc.kind == "radarr" {
+				animeConfig["anime_root_folder"] = "/dedicated-anime"
+				animeConfig["anime_quality_profile_id"] = 21
+				animeConfig["anime_tags"] = []any{21, 22}
+			}
+
+			// When
+			resp, err := New().Fulfill(context.Background(), &pluginv1.FulfillRequest{
+				Request:     &pluginv1.RequestDescriptor{MediaType: tc.mediaType, IsAnime: true, ExternalIds: tc.ids},
+				Qualities:   []*pluginv1.RequestedQuality{{Id: "1080p"}},
+				Connections: []*pluginv1.RouterConnection{normal.connection("normal", normalConfig), anime.connection("anime", animeConfig)},
+			})
+
+			// Then
+			if err != nil || len(resp.GetTargets()) != 1 || resp.GetTargets()[0].GetConnectionId() != "anime" {
+				t.Fatalf("Fulfill: response=%#v err=%v", resp, err)
+			}
+			if lookup, add, _ := normal.snapshot(); lookup != 0 || add != 0 {
+				t.Fatalf("normal server calls: want 0/0 got %d/%d", lookup, add)
+			}
+			lookup, add, body := anime.snapshot()
+			if lookup != 1 || add != 1 {
+				t.Fatalf("anime server calls: want 1/1 got %d/%d", lookup, add)
+			}
+			for field, want := range tc.wantFields {
+				if !reflect.DeepEqual(body[field], want) {
+					t.Fatalf("%s payload %s: want %#v got %#v", tc.kind, field, want, body[field])
+				}
+			}
+		})
 	}
 }
 
-func TestValidateRejects4KDefaultOnNon4K(t *testing.T) {
-	cfg, _ := structpb.NewStruct(map[string]any{"service_kind": "radarr", "is_default_4k": true, "is_4k": false})
-	resp, _ := New().Validate(context.Background(), &pluginv1.ValidateRequest{
-		CapabilityId: "arr", Connection: &pluginv1.RouterConnection{Id: "c1", Config: cfg},
-	})
-	if resp.GetFieldErrors()["is_default_4k"] == "" && resp.GetFormError() == "" {
-		t.Fatal("expected a validation error for 4K default on a non-4K server")
+func TestFulfillAnimeFallsBackToNormalRole(t *testing.T) {
+	cases := []struct {
+		name        string
+		config      map[string]any
+		wantRoot    string
+		wantProfile float64
+		wantTags    []any
+	}{
+		{"anime enabled applies overlays", map[string]any{"anime_enabled": true, "anime_root_folder": "/anime", "anime_quality_profile_id": 2, "anime_tags": []any{2}}, "/anime", 2, []any{float64(2)}},
+		{"anime disabled remains standard", map[string]any{"anime_enabled": false, "anime_root_folder": "/anime", "anime_quality_profile_id": 2, "anime_tags": []any{2}}, "/standard", 1, []any{float64(1)}},
+		{"wrong anime tier remains standard", map[string]any{"is_anime_default_4k": true}, "/standard", 1, []any{float64(1)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			server := newFulfillProbe(t, "radarr")
+			defer server.server.Close()
+			config := map[string]any{"service_kind": "radarr", "is_default": true, "root_folder": "/standard", "quality_profile_id": 1, "tags": []any{1}}
+			for field, value := range tc.config {
+				config[field] = value
+			}
+
+			// When
+			resp, err := New().Fulfill(context.Background(), &pluginv1.FulfillRequest{
+				Request:     &pluginv1.RequestDescriptor{MediaType: "movie", IsAnime: true, ExternalIds: map[string]string{"tmdb": "42"}},
+				Qualities:   []*pluginv1.RequestedQuality{{Id: "1080p"}},
+				Connections: []*pluginv1.RouterConnection{server.connection("normal", config)},
+			})
+
+			// Then
+			if err != nil || len(resp.GetTargets()) != 1 || resp.GetTargets()[0].GetConnectionId() != "normal" {
+				t.Fatalf("Fulfill: response=%#v err=%v", resp, err)
+			}
+			lookup, add, body := server.snapshot()
+			if lookup != 1 || add != 1 {
+				t.Fatalf("server calls: want 1/1 got %d/%d", lookup, add)
+			}
+			if body["rootFolderPath"] != tc.wantRoot || body["qualityProfileId"] != tc.wantProfile || !reflect.DeepEqual(body["tags"], tc.wantTags) {
+				t.Fatalf("Radarr payload: want %q/%v/%#v got %#v", tc.wantRoot, tc.wantProfile, tc.wantTags, body)
+			}
+		})
 	}
 }
 
-func TestValidateAcceptsConsistentConfig(t *testing.T) {
-	cfg, _ := structpb.NewStruct(map[string]any{"service_kind": "radarr", "is_default": true, "is_4k": false})
-	resp, _ := New().Validate(context.Background(), &pluginv1.ValidateRequest{
-		CapabilityId: "arr", Connection: &pluginv1.RouterConnection{Id: "c1", Config: cfg},
+func TestFulfillAnimeReturnsExistingZeroTargetMessageWithoutMatchingRole(t *testing.T) {
+	// Given
+	server := newFulfillProbe(t, "radarr")
+	defer server.server.Close()
+
+	// When
+	resp, err := New().Fulfill(context.Background(), &pluginv1.FulfillRequest{
+		Request:     &pluginv1.RequestDescriptor{MediaType: "movie", IsAnime: true, ExternalIds: map[string]string{"tmdb": "42"}},
+		Qualities:   []*pluginv1.RequestedQuality{{Id: "1080p"}},
+		Connections: []*pluginv1.RouterConnection{server.connection("wrong-kind", map[string]any{"service_kind": "sonarr", "is_anime_default": true, "root_folder": "/tv", "quality_profile_id": 1})},
 	})
-	if len(resp.GetFieldErrors()) != 0 || resp.GetFormError() != "" {
-		t.Fatalf("expected no errors, got fe=%v form=%q", resp.GetFieldErrors(), resp.GetFormError())
+
+	// Then
+	if err != nil || len(resp.GetTargets()) != 0 || resp.GetMessage() != "no radarr instance configured for the requested quality" {
+		t.Fatalf("Fulfill: response=%#v err=%v", resp, err)
+	}
+	if lookup, add, _ := server.snapshot(); lookup != 0 || add != 0 {
+		t.Fatalf("wrong-kind server calls: want 0/0 got %d/%d", lookup, add)
 	}
 }
 

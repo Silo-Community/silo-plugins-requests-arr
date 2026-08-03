@@ -202,9 +202,9 @@ func (s *Server) TestConnection(ctx context.Context, req *pluginv1.TestConnectio
 }
 
 // Validate runs cross-field consistency checks on a single connection's config.
-// A connection cannot be the HD default while flagged as a 4K server, and the
-// 4K default must actually be a 4K server. Errors are returned per-field so the
-// schema-driven config form can highlight the offending toggles.
+// HD defaults cannot be 4K servers, and 4K defaults must be 4K servers. The
+// same constraints apply to anime defaults. Errors are returned per-field so
+// the schema-driven config form can highlight the offending toggles.
 func (s *Server) Validate(ctx context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateResponse, error) {
 	in := instanceFromConnection(req.GetConnection())
 	fieldErrors := map[string]string{}
@@ -214,7 +214,13 @@ func (s *Server) Validate(ctx context.Context, req *pluginv1.ValidateRequest) (*
 	if in.IsDefault4K && !in.Is4K {
 		fieldErrors["is_default_4k"] = "the 4K default must be a 4K server"
 	}
-	// One default per service_kind, per tier. Compare only against siblings of
+	if in.IsAnimeDefault && in.Is4K {
+		fieldErrors["is_anime_default"] = "the anime HD default cannot be a 4K server"
+	}
+	if in.IsAnimeDefault4K && !in.Is4K {
+		fieldErrors["is_anime_default_4k"] = "the anime 4K default must be a 4K server"
+	}
+	// One default per service_kind, role, and tier. Compare only against siblings of
 	// the same kind; a config-less or different-kind sibling never conflicts.
 	for _, sib := range req.GetSiblings() {
 		if sib.GetId() == req.GetConnection().GetId() {
@@ -229,6 +235,12 @@ func (s *Server) Validate(ctx context.Context, req *pluginv1.ValidateRequest) (*
 		}
 		if in.IsDefault4K && other.IsDefault4K {
 			fieldErrors["is_default_4k"] = fmt.Sprintf("%s already has a 4K default; unset it on the other connection first", in.Kind)
+		}
+		if in.IsAnimeDefault && other.IsAnimeDefault {
+			fieldErrors["is_anime_default"] = fmt.Sprintf("%s already has an anime HD default; unset it on the other connection first", in.Kind)
+		}
+		if in.IsAnimeDefault4K && other.IsAnimeDefault4K {
+			fieldErrors["is_anime_default_4k"] = fmt.Sprintf("%s already has an anime 4K default; unset it on the other connection first", in.Kind)
 		}
 	}
 	return &pluginv1.ValidateResponse{FieldErrors: fieldErrors}, nil
