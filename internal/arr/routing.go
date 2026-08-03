@@ -19,9 +19,11 @@ type RequestedQuality struct {
 // RouteTargets maps the host-requested qualities onto configured instances for
 // the request's kind (radarr for movies, sonarr otherwise).
 //
-// For each requested quality it selects the enabled default instance for that
-// tier — IsDefault for the HD tier, IsDefault4K when the host marked the tier
-// is4k — and emits one PlannedTarget per quality that has a matching instance.
+// For each requested quality an anime request first selects the enabled anime
+// default for that tier — IsAnimeDefault for HD, IsAnimeDefault4K for 4K — then
+// falls back to the corresponding standard default. Non-anime requests use
+// standard defaults directly. It emits one PlannedTarget per quality that has a
+// matching instance.
 // Qualities with no matching instance are omitted, so an unconfigured tier
 // silently yields no target rather than an error.
 func RouteTargets(req Request, qualities []RequestedQuality, instances []Instance) []PlannedTarget {
@@ -33,22 +35,39 @@ func RouteTargets(req Request, qualities []RequestedQuality, instances []Instanc
 	var targets []PlannedTarget
 	for _, q := range qualities {
 		var match *Instance
-		for i := range instances {
-			in := &instances[i]
-			if !in.Enabled || in.Kind != wantKind {
-				continue
-			}
-			if q.Is4K {
-				if in.IsDefault4K {
-					match = in
+		selectedAnimeRole := false
+		if req.IsAnime {
+			for i := range instances {
+				in := &instances[i]
+				if !in.Enabled || in.Kind != wantKind {
+					continue
 				}
-			} else {
-				if in.IsDefault {
+				if (!q.Is4K && in.IsAnimeDefault) || (q.Is4K && in.IsAnimeDefault4K) {
 					match = in
+					selectedAnimeRole = true
+					break
 				}
 			}
-			if match != nil {
-				break
+		}
+
+		if match == nil {
+			for i := range instances {
+				in := &instances[i]
+				if !in.Enabled || in.Kind != wantKind {
+					continue
+				}
+				if q.Is4K {
+					if in.IsDefault4K {
+						match = in
+					}
+				} else {
+					if in.IsDefault {
+						match = in
+					}
+				}
+				if match != nil {
+					break
+				}
 			}
 		}
 		if match == nil {
@@ -57,7 +76,7 @@ func RouteTargets(req Request, qualities []RequestedQuality, instances []Instanc
 		targets = append(targets, PlannedTarget{
 			Instance: *match,
 			Quality:  q.ID,
-			IsAnime:  req.IsAnime && match.AnimeEnabled,
+			IsAnime:  selectedAnimeRole || (req.IsAnime && match.AnimeEnabled),
 		})
 	}
 	return targets

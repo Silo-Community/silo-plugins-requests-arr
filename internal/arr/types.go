@@ -63,6 +63,8 @@ type Instance struct {
 	IsDefault             bool
 	IsDefault4K           bool
 	Is4K                  bool
+	IsAnimeDefault        bool
+	IsAnimeDefault4K      bool
 	AnimeEnabled          bool
 	AnimeRootFolder       string
 	AnimeQualityProfileID *int
