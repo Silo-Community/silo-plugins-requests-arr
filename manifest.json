@@ -40,7 +40,7 @@
         {
           "key": "connection",
           "title": "Connection",
-          "json_schema": "{\"type\":\"object\",\"properties\":{\"service_kind\":{\"type\":\"string\"},\"root_folder\":{\"type\":\"string\"},\"quality_profile_id\":{\"type\":\"integer\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},\"is_default\":{\"type\":\"boolean\"},\"is_4k\":{\"type\":\"boolean\"},\"is_default_4k\":{\"type\":\"boolean\"},\"search_on_add\":{\"type\":\"boolean\"},\"minimum_availability\":{\"type\":\"string\"},\"series_type\":{\"type\":\"string\"},\"season_folder\":{\"type\":\"boolean\"},\"anime_enabled\":{\"type\":\"boolean\"},\"anime_root_folder\":{\"type\":\"string\"},\"anime_quality_profile_id\":{\"type\":\"integer\"},\"anime_tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}}}",
+          "json_schema": "{\"type\":\"object\",\"properties\":{\"service_kind\":{\"type\":\"string\"},\"root_folder\":{\"type\":\"string\"},\"quality_profile_id\":{\"type\":\"integer\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},\"is_default\":{\"type\":\"boolean\"},\"is_4k\":{\"type\":\"boolean\"},\"is_default_4k\":{\"type\":\"boolean\"},\"search_on_add\":{\"type\":\"boolean\"},\"minimum_availability\":{\"type\":\"string\"},\"series_type\":{\"type\":\"string\"},\"season_folder\":{\"type\":\"boolean\"},\"anime_enabled\":{\"type\":\"boolean\"},\"anime_root_folder\":{\"type\":\"string\"},\"anime_quality_profile_id\":{\"type\":\"integer\"},\"anime_tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},\"is_anime_default\":{\"type\":\"boolean\"},\"is_anime_default_4k\":{\"type\":\"boolean\"}}}",
           "admin_form": {
             "submit_label": "Save connection",
             "fields": [
@@ -226,6 +226,28 @@
                     ]
                   }
                 ]
+              },
+              {
+                "key": "is_anime_default",
+                "label": "Anime default (HD/1080p)",
+                "description": "Prefer this instance for anime HD requests; fall back to the standard HD default when unset.",
+                "control": "ADMIN_FORM_CONTROL_SWITCH",
+                "exclusive_group_field": "service_kind"
+              },
+              {
+                "key": "is_anime_default_4k",
+                "label": "Anime default 4K (2160p)",
+                "description": "Prefer this instance for anime 4K requests; fall back to the standard 4K default when unset.",
+                "control": "ADMIN_FORM_CONTROL_SWITCH",
+                "show_when": [
+                  {
+                    "field": "is_4k",
+                    "equals": [
+                      "true"
+                    ]
+                  }
+                ],
+                "exclusive_group_field": "service_kind"
               }
             ],
             "sections": [
@@ -257,7 +279,9 @@
                   "anime_enabled",
                   "anime_root_folder",
                   "anime_quality_profile_id",
-                  "anime_tags"
+                  "anime_tags",
+                  "is_anime_default",
+                  "is_anime_default_4k"
                 ]
               }
             ]
