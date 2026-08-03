@@ -28,6 +28,8 @@ func instanceFromConnection(c *pluginv1.RouterConnection) arr.Instance {
 		IsDefault:             getBool(cfg, "is_default"),
 		IsDefault4K:           getBool(cfg, "is_default_4k"),
 		Is4K:                  getBool(cfg, "is_4k"),
+		IsAnimeDefault:        getBool(cfg, "is_anime_default"),
+		IsAnimeDefault4K:      getBool(cfg, "is_anime_default_4k"),
 		AnimeEnabled:          getBool(cfg, "anime_enabled"),
 		AnimeRootFolder:       getString(cfg, "anime_root_folder"),
 		AnimeQualityProfileID: getIntPtr(cfg, "anime_quality_profile_id"),
