@@ -88,6 +88,14 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 	}
 
 	client := httpclient.New(integration.BaseURL, integration.APIKeyRef, c.httpClient)
+	existing, found, err := c.findSeriesByTVDBID(ctx, client, *req.TVDBID)
+	if err != nil {
+		return FulfillmentResult{}, err
+	}
+	if found {
+		return resultFromSeries(existing), nil
+	}
+
 	series, err := c.lookupSeries(ctx, client, *req.TVDBID)
 	if err != nil {
 		return FulfillmentResult{}, err
@@ -109,34 +117,40 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 	}
 
 	var created seriesResource
-	if err := client.PostJSON(ctx, "/api/v3/series", series, &created); err != nil {
-		return FulfillmentResult{}, err
+	if postErr := client.PostJSON(ctx, "/api/v3/series", series, &created); postErr != nil {
+		// The series may have been added between the preflight lookup and POST,
+		// or the POST may have succeeded even though its response was lost.
+		// Recover either case without hiding a genuine add failure.
+		if existing, found, lookupErr := c.findSeriesByTVDBID(ctx, client, *req.TVDBID); lookupErr == nil && found {
+			return resultFromSeries(existing), nil
+		}
+		return FulfillmentResult{}, postErr
 	}
 	if created.ID == 0 {
 		// POST accepted but Sonarr returned an empty body. Recover the new
 		// series' Sonarr ID by listing series filtered by TVDB ID; without the
 		// ID the reconcile loop cannot advance the request.
-		if found, lookErr := c.findSeriesByTVDBID(ctx, client, *req.TVDBID); lookErr == nil && found.ID > 0 {
-			return resultFromSeries(found), nil
+		if existing, found, lookupErr := c.findSeriesByTVDBID(ctx, client, *req.TVDBID); lookupErr == nil && found {
+			return resultFromSeries(existing), nil
 		}
 		return AcceptedWithoutResponse("sonarr"), nil
 	}
 	return resultFromSeries(created), nil
 }
 
-func (c *SonarrClient) findSeriesByTVDBID(ctx context.Context, client *httpclient.Client, tvdbID int) (seriesResource, error) {
+func (c *SonarrClient) findSeriesByTVDBID(ctx context.Context, client *httpclient.Client, tvdbID int) (seriesResource, bool, error) {
 	values := url.Values{}
 	values.Set("tvdbId", strconv.Itoa(tvdbID))
 	var matches []seriesResource
 	if err := client.GetJSON(ctx, "/api/v3/series?"+values.Encode(), &matches); err != nil {
-		return seriesResource{}, err
+		return seriesResource{}, false, err
 	}
 	for _, s := range matches {
 		if s.ID > 0 && s.TVDBID == tvdbID {
-			return s, nil
+			return s, true, nil
 		}
 	}
-	return seriesResource{}, fmt.Errorf("sonarr: series not found after add for tvdb_id %d", tvdbID)
+	return seriesResource{}, false, nil
 }
 
 func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integration Instance) (FulfillmentStatus, error) {

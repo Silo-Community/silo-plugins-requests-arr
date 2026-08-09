@@ -76,6 +76,14 @@ func (c *RadarrClient) SubmitMovie(ctx context.Context, req Request, integration
 	}
 
 	client := httpclient.New(integration.BaseURL, integration.APIKeyRef, c.httpClient)
+	existing, found, err := c.findMovieByTMDBID(ctx, client, req.TMDBID)
+	if err != nil {
+		return FulfillmentResult{}, err
+	}
+	if found {
+		return resultFromMovie(existing), nil
+	}
+
 	movie, err := c.lookupMovie(ctx, client, req.TMDBID)
 	if err != nil {
 		return FulfillmentResult{}, err
@@ -95,34 +103,40 @@ func (c *RadarrClient) SubmitMovie(ctx context.Context, req Request, integration
 	}
 
 	var created movieResource
-	if err := client.PostJSON(ctx, "/api/v3/movie", movie, &created); err != nil {
-		return FulfillmentResult{}, err
+	if postErr := client.PostJSON(ctx, "/api/v3/movie", movie, &created); postErr != nil {
+		// The movie may have been added between the preflight lookup and POST,
+		// or the POST may have succeeded even though its response was lost.
+		// Recover either case without hiding a genuine add failure.
+		if existing, found, lookupErr := c.findMovieByTMDBID(ctx, client, req.TMDBID); lookupErr == nil && found {
+			return resultFromMovie(existing), nil
+		}
+		return FulfillmentResult{}, postErr
 	}
 	if created.ID == 0 {
 		// POST accepted but Radarr returned an empty body. Recover the new
 		// movie's Radarr ID by listing movies filtered by TMDB ID; without the
 		// ID the reconcile loop cannot advance the request.
-		if found, lookErr := c.findMovieByTMDBID(ctx, client, req.TMDBID); lookErr == nil && found.ID > 0 {
-			return resultFromMovie(found), nil
+		if existing, found, lookupErr := c.findMovieByTMDBID(ctx, client, req.TMDBID); lookupErr == nil && found {
+			return resultFromMovie(existing), nil
 		}
 		return AcceptedWithoutResponse("radarr"), nil
 	}
 	return resultFromMovie(created), nil
 }
 
-func (c *RadarrClient) findMovieByTMDBID(ctx context.Context, client *httpclient.Client, tmdbID int) (movieResource, error) {
+func (c *RadarrClient) findMovieByTMDBID(ctx context.Context, client *httpclient.Client, tmdbID int) (movieResource, bool, error) {
 	values := url.Values{}
 	values.Set("tmdbId", strconv.Itoa(tmdbID))
 	var matches []movieResource
 	if err := client.GetJSON(ctx, "/api/v3/movie?"+values.Encode(), &matches); err != nil {
-		return movieResource{}, err
+		return movieResource{}, false, err
 	}
 	for _, m := range matches {
 		if m.ID > 0 && m.TMDBID == tmdbID {
-			return m, nil
+			return m, true, nil
 		}
 	}
-	return movieResource{}, fmt.Errorf("radarr: movie not found after add for tmdb_id %d", tmdbID)
+	return movieResource{}, false, nil
 }
 
 func (c *RadarrClient) CheckMovieStatus(ctx context.Context, req Request, integration Instance) (FulfillmentStatus, error) {
