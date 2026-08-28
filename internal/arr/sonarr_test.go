@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -73,9 +74,144 @@ func TestSubmitSeriesAddsLookupResult(t *testing.T) {
 	}
 }
 
+func TestSubmitSeriesAdoptsExistingSeries(t *testing.T) {
+	qualityProfileID := 3
+	tvdbID := 121361
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/series" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		if got := r.URL.Query().Get("tvdbId"); got != "121361" {
+			t.Fatalf("tvdbId = %q, want 121361", got)
+		}
+		w.Write([]byte(`[{"id":24,"tvdbId":121361,"qualityProfileId":99,"rootFolderPath":"/existing"}]`))
+	}))
+	defer server.Close()
+
+	result, err := NewSonarrClient(server.Client()).SubmitSeries(context.Background(), Request{
+		MediaType: MediaTypeSeries,
+		TVDBID:    &tvdbID,
+	}, Instance{
+		Kind:             "sonarr",
+		BaseURL:          server.URL,
+		APIKeyRef:        "sonarr-key",
+		RootFolder:       "/series",
+		QualityProfileID: &qualityProfileID,
+	})
+	if err != nil {
+		t.Fatalf("SubmitSeries returned error: %v", err)
+	}
+	if result.ExternalID != "24" || result.ExternalStatus != "queued" {
+		t.Fatalf("result = %+v, want adopted Sonarr series 24", result)
+	}
+}
+
+func TestSubmitSeriesFailsWhenPreflightFails(t *testing.T) {
+	qualityProfileID := 3
+	tvdbID := 121361
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/series" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	_, err := NewSonarrClient(server.Client()).SubmitSeries(context.Background(), Request{
+		MediaType: MediaTypeSeries,
+		TVDBID:    &tvdbID,
+	}, Instance{
+		Kind:             "sonarr",
+		BaseURL:          server.URL,
+		APIKeyRef:        "sonarr-key",
+		QualityProfileID: &qualityProfileID,
+	})
+	if err == nil {
+		t.Fatal("expected preflight error")
+	}
+}
+
+func TestSubmitSeriesRecoversWhenConcurrentAddWins(t *testing.T) {
+	qualityProfileID := 3
+	tvdbID := 121361
+	lookupCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/series":
+			if r.Method == http.MethodGet {
+				lookupCount++
+				if lookupCount == 1 {
+					w.Write([]byte(`[]`))
+					return
+				}
+				w.Write([]byte(`[{"id":24,"tvdbId":121361}]`))
+				return
+			}
+			http.Error(w, "already added", http.StatusBadRequest)
+		case "/api/v3/series/lookup":
+			w.Write([]byte(`[{"title":"Game of Thrones","tvdbId":121361,"titleSlug":"game-of-thrones"}]`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	result, err := NewSonarrClient(server.Client()).SubmitSeries(context.Background(), Request{
+		MediaType: MediaTypeSeries,
+		TVDBID:    &tvdbID,
+	}, Instance{
+		Kind:             "sonarr",
+		BaseURL:          server.URL,
+		APIKeyRef:        "sonarr-key",
+		RootFolder:       "/series",
+		QualityProfileID: &qualityProfileID,
+	})
+	if err != nil {
+		t.Fatalf("SubmitSeries returned error: %v", err)
+	}
+	if result.ExternalID != "24" || lookupCount != 2 {
+		t.Fatalf("result = %+v, lookups = %d; want series 24 after two lookups", result, lookupCount)
+	}
+}
+
+func TestSubmitSeriesPreservesPostErrorWhenRecoveryFindsNothing(t *testing.T) {
+	qualityProfileID := 3
+	tvdbID := 121361
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/series":
+			if r.Method == http.MethodGet {
+				w.Write([]byte(`[]`))
+				return
+			}
+			http.Error(w, "add failed", http.StatusInternalServerError)
+		case "/api/v3/series/lookup":
+			w.Write([]byte(`[{"title":"Game of Thrones","tvdbId":121361,"titleSlug":"game-of-thrones"}]`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	_, err := NewSonarrClient(server.Client()).SubmitSeries(context.Background(), Request{
+		MediaType: MediaTypeSeries,
+		TVDBID:    &tvdbID,
+	}, Instance{
+		Kind:             "sonarr",
+		BaseURL:          server.URL,
+		APIKeyRef:        "sonarr-key",
+		RootFolder:       "/series",
+		QualityProfileID: &qualityProfileID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("error = %v, want original HTTP 500 error", err)
+	}
+}
+
 func TestSubmitSeriesRecoversFromEmptyAddResponse(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
+	lookupCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/series/lookup":
@@ -86,8 +222,13 @@ func TestSubmitSeriesRecoversFromEmptyAddResponse(t *testing.T) {
 				return
 			}
 			if r.Method == http.MethodGet {
+				lookupCount++
 				if got := r.URL.Query().Get("tvdbId"); got != "121361" {
 					t.Fatalf("tvdbId = %q, want 121361", got)
+				}
+				if lookupCount == 1 {
+					w.Write([]byte(`[]`))
+					return
 				}
 				w.Write([]byte(`[{"id":77,"tvdbId":121361,"title":"Game of Thrones"}]`))
 				return
@@ -126,10 +267,14 @@ func TestSubmitSeriesRejectsNonExactTVDBLookupMatch(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v3/series/lookup" {
+		switch r.URL.Path {
+		case "/api/v3/series":
+			w.Write([]byte(`[]`))
+		case "/api/v3/series/lookup":
+			w.Write([]byte(`[{"title":"Wrong Show","tvdbId":999,"titleSlug":"wrong-show"}]`))
+		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
-		w.Write([]byte(`[{"title":"Wrong Show","tvdbId":999,"titleSlug":"wrong-show"}]`))
 	}))
 	defer server.Close()
 
