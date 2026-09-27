@@ -203,6 +203,8 @@ func TestRootFolderLabelEncodesFreeSpaceAndAccessibility(t *testing.T) {
 func TestListConfigOptionsRootFolderLabelsCarryFreeSpace(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/v3/system/status":
+			w.Write([]byte(`{"appName":"Radarr","version":"5.2.0"}`))
 		case "/api/v3/rootfolder":
 			w.Write([]byte(`[{"path":"/movies","freeSpace":1610612736,"totalSpace":2000000000,"accessible":true},{"path":"/old","accessible":false}]`))
 		case "/api/v3/qualityprofile":
