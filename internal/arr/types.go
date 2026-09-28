@@ -41,12 +41,15 @@ const (
 
 // Request is the per-target view the arr submitters need.
 type Request struct {
-	MediaType  MediaType
-	TMDBID     int
-	TVDBID     *int
-	Title      string
-	Year       int
-	IsAnime    bool
+	MediaType MediaType
+	TMDBID    int
+	TVDBID    *int
+	Title     string
+	Year      int
+	IsAnime   bool
+	// Seasons are the season numbers a series request asks for, sorted and
+	// without duplicates; 0 is Specials and none means the whole series.
+	Seasons    []int
 	ExternalID string // set by CheckStatus probes
 }
 
