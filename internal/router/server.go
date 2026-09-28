@@ -3,8 +3,13 @@ package router
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
+	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/httpclient"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/Silo-Community/silo-plugins-requests-arr/internal/arr"
 )
@@ -141,13 +146,28 @@ func (s *Server) CheckStatus(ctx context.Context, req *pluginv1.CheckStatusReque
 	return &pluginv1.CheckStatusResponse{Statuses: statuses}, nil
 }
 
+// validateDetectTimeout bounds the detection Validate runs on save, so a slow
+// server cannot hold the save for the HTTP client's full timeout.
+const validateDetectTimeout = 10 * time.Second
+
+func detectService(ctx context.Context, in arr.Instance) (kind, label string, err error) {
+	return arr.DetectService(ctx, httpclient.New(in.BaseURL, in.APIKeyRef, nil))
+}
+
 // ListConfigOptions returns the selectable root folders / quality profiles /
 // tags for a connection, keyed by both the standard and anime config fields.
+// It first asks the server whether it is Sonarr or Radarr, reads the options
+// the way that service serves them, and reports what it found as the single
+// service_kind option, labelled with the name and version.
 func (s *Server) ListConfigOptions(ctx context.Context, req *pluginv1.ListConfigOptionsRequest) (*pluginv1.ListConfigOptionsResponse, error) {
 	in := instanceFromConnection(req.GetConnection())
+	kind, label, err := detectService(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	in.Kind = kind
 
 	var opts *arr.IntegrationOptions
-	var err error
 	if in.Kind == "sonarr" {
 		opts, err = arr.NewSonarrClient(nil).ListSeriesIntegrationOptions(ctx, in)
 	} else {
@@ -180,16 +200,21 @@ func (s *Server) ListConfigOptions(ctx context.Context, req *pluginv1.ListConfig
 			"anime_quality_profile_id": qp,
 			"tags":                     tg,
 			"anime_tags":               tg,
+			"service_kind":             {Options: []*pluginv1.ConfigOption{{Value: kind, Label: label}}},
 		},
 	}, nil
 }
 
-// TestConnection verifies the plugin can reach the arr instance by listing its
-// integration options.
+// TestConnection verifies the plugin can reach the arr instance by detecting
+// the service and listing its integration options.
 func (s *Server) TestConnection(ctx context.Context, req *pluginv1.TestConnectionRequest) (*pluginv1.TestConnectionResponse, error) {
 	in := instanceFromConnection(req.GetConnection())
 
-	var err error
+	kind, label, err := detectService(ctx, in)
+	if err != nil {
+		return &pluginv1.TestConnectionResponse{Ok: false, Message: statusMessage(err)}, nil
+	}
+	in.Kind = kind
 	if in.Kind == "sonarr" {
 		_, err = arr.NewSonarrClient(nil).ListSeriesIntegrationOptions(ctx, in)
 	} else {
@@ -198,7 +223,15 @@ func (s *Server) TestConnection(ctx context.Context, req *pluginv1.TestConnectio
 	if err != nil {
 		return &pluginv1.TestConnectionResponse{Ok: false, Message: err.Error()}, nil
 	}
-	return &pluginv1.TestConnectionResponse{Ok: true, Message: "connection successful"}, nil
+	return &pluginv1.TestConnectionResponse{Ok: true, Message: "Connected to " + label}, nil
+}
+
+// statusMessage is a gRPC status's message, or the error text.
+func statusMessage(err error) string {
+	if st, ok := status.FromError(err); ok {
+		return st.Message()
+	}
+	return err.Error()
 }
 
 // Validate runs cross-field consistency checks on a single connection's config.
@@ -213,6 +246,20 @@ func (s *Server) Validate(ctx context.Context, req *pluginv1.ValidateRequest) (*
 	}
 	if in.IsDefault4K && !in.Is4K {
 		fieldErrors["is_default_4k"] = "the 4K default must be a 4K server"
+	}
+	// The service chosen must be the one at the address. Detection that fails
+	// for any other reason does not block the save: the options probe already
+	// reports whether the server can be reached.
+	if strings.TrimSpace(in.BaseURL) != "" && strings.TrimSpace(in.APIKeyRef) != "" {
+		detectCtx, cancel := context.WithTimeout(ctx, validateDetectTimeout)
+		kind, _, err := detectService(detectCtx, in)
+		cancel()
+		switch {
+		case err == nil && kind != in.Kind:
+			fieldErrors["service_kind"] = fmt.Sprintf("This server is %s.", arr.KindLabel(kind))
+		case status.Code(err) == codes.InvalidArgument:
+			fieldErrors["service_kind"] = statusMessage(err)
+		}
 	}
 	// One default per service_kind, per tier. Compare only against siblings of
 	// the same kind; a config-less or different-kind sibling never conflicts.

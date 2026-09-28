@@ -47,6 +47,7 @@
               {
                 "key": "service_kind",
                 "label": "Service",
+                "description": "Detected from the server when it connects.",
                 "control": "ADMIN_FORM_CONTROL_SELECT",
                 "required": true,
                 "options": [
