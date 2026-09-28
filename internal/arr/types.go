@@ -86,6 +86,9 @@ type FulfillmentStatus struct {
 	ExternalID      string
 	ExternalStatus  string
 	Message         string
+	// Progress is set while the target is queued or downloading and the
+	// service has queue items for it.
+	Progress *Progress
 }
 
 type IntegrationRootFolder struct {

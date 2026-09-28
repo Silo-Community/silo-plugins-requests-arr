@@ -109,3 +109,15 @@ func TestManifestDeclaresSeasonSupport(t *testing.T) {
 		t.Fatalf("request_router.supports_seasons = false, want true")
 	}
 }
+
+// The host polls a request router for download progress every minute only when
+// its stored manifest declares reports_download_progress.
+func TestManifestDeclaresDownloadProgress(t *testing.T) {
+	m, err := publicmanifest.LoadWithChecksum(manifestJSON, version)
+	if err != nil {
+		t.Fatalf("LoadWithChecksum: %v", err)
+	}
+	if !m.GetCapabilities()[0].GetRequestRouter().GetReportsDownloadProgress() {
+		t.Fatalf("request_router.reports_download_progress = false, want true")
+	}
+}

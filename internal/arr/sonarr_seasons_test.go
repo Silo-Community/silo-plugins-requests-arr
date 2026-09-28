@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeSeason is one season of a fake Sonarr series. Files counts the aired
@@ -467,5 +468,54 @@ func TestCheckSeriesStatusIgnoresOtherSeasonsInQueue(t *testing.T) {
 	}
 	if got := checkSeasons(t, f, nil); got.Outcome != OutcomeFailed {
 		t.Fatalf("whole-series request status = %+v, want a failed outcome", got)
+	}
+}
+
+// Progress covers only the request's seasons, and a season pack that Sonarr
+// lists under each of its episodes counts once.
+func TestCheckSeriesStatusReportsProgressForRequestedSeasons(t *testing.T) {
+	f := newFakeSonarr(t, true,
+		fakeSeason{Number: 1, Monitored: true, Episodes: 3},
+		fakeSeason{Number: 2, Monitored: true, Episodes: 10},
+		fakeSeason{Number: 3, Monitored: true, Episodes: 10, Files: 10},
+	)
+	f.queue = `[
+	  {"id":1,"seriesId":24,"seasonNumber":1,"status":"downloading","trackedDownloadState":"downloading","downloadId":"s01","size":3000,"sizeleft":1200,"estimatedCompletionTime":"2026-09-28T12:30:00Z"},
+	  {"id":2,"seriesId":24,"seasonNumber":1,"status":"downloading","trackedDownloadState":"downloading","downloadId":"s01","size":3000,"sizeleft":1200,"estimatedCompletionTime":"2026-09-28T12:30:00Z"},
+	  {"id":3,"seriesId":24,"seasonNumber":1,"status":"downloading","trackedDownloadState":"downloading","downloadId":"s01","size":3000,"sizeleft":1200,"estimatedCompletionTime":"2026-09-28T12:30:00Z"},
+	  {"id":4,"seriesId":24,"seasonNumber":2,"status":"paused","trackedDownloadState":"downloading","downloadId":"s02e01","size":500,"sizeleft":500,"estimatedCompletionTime":"2026-09-28T14:00:00Z"}
+	]`
+	cases := []struct {
+		name    string
+		seasons []int
+		want    *Progress
+		eta     string
+	}{
+		{"season 1", []int{1}, &Progress{Phase: PhaseDownloading, BytesTotal: 3000, BytesLeft: 1200, Downloads: 1}, "2026-09-28T12:30:00Z"},
+		{"season 2", []int{2}, &Progress{Phase: PhasePaused, BytesTotal: 500, BytesLeft: 500, Downloads: 1}, "2026-09-28T14:00:00Z"},
+		{"whole series", nil, &Progress{Phase: PhaseDownloading, BytesTotal: 3500, BytesLeft: 1700, Downloads: 2}, "2026-09-28T14:00:00Z"},
+		{"completed season", []int{3}, nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkSeasons(t, f, tc.seasons).Progress
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("progress = %+v, want none", got)
+				}
+				return
+			}
+			if got == nil || got.Phase != tc.want.Phase || got.BytesTotal != tc.want.BytesTotal ||
+				got.BytesLeft != tc.want.BytesLeft || got.Downloads != tc.want.Downloads {
+				t.Fatalf("progress = %+v, want %+v", got, tc.want)
+			}
+			eta, err := time.Parse(time.RFC3339, tc.eta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.EstimatedCompletion == nil || !got.EstimatedCompletion.Equal(eta) {
+				t.Fatalf("estimated completion = %v, want %v", got.EstimatedCompletion, eta)
+			}
+		})
 	}
 }
