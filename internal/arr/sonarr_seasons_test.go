@@ -42,8 +42,11 @@ type fakeSonarr struct {
 	seasons   []fakeSeason
 	episodes  []fakeEpisode
 	queue     string
+	// downloadClientConfig answers GET /api/v3/config/downloadclient.
+	downloadClientConfig string
 
 	posted       map[string]any
+	configReads  int
 	puts         []map[string]any
 	monitorCalls [][]int
 	commands     []map[string]any
@@ -53,7 +56,10 @@ type fakeSonarr struct {
 // whether Sonarr already has it; lookup always offers it with every season
 // monitored, as Sonarr's lookup does.
 func newFakeSonarr(t *testing.T, exists bool, seasons ...fakeSeason) *fakeSonarr {
-	f := &fakeSonarr{t: t, tvdbID: 121361, seasons: seasons, monitored: true, queue: `[]`}
+	f := &fakeSonarr{
+		t: t, tvdbID: 121361, seasons: seasons, monitored: true, queue: `[]`,
+		downloadClientConfig: `{"autoRedownloadFailed":true}`,
+	}
 	if exists {
 		f.seriesID = 24
 		f.resetEpisodes()
@@ -198,6 +204,9 @@ func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write(map[string]any{"id": len(f.commands), "status": "queued"})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue/details":
 		_, _ = w.Write([]byte(f.queue))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/config/downloadclient":
+		f.configReads++
+		_, _ = w.Write([]byte(f.downloadClientConfig))
 	default:
 		f.t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 	}
@@ -453,21 +462,35 @@ func TestCheckSeriesStatusScopesCompletionToRequestedSeasons(t *testing.T) {
 	}
 }
 
-// Queue entries for other seasons are not the request's downloads.
+// Queue entries for other seasons are not the request's downloads. A failed
+// download that Sonarr will not replace fails the requests for its season and
+// the whole series, and a request for another season does not even read the
+// setting that decides it.
 func TestCheckSeriesStatusIgnoresOtherSeasonsInQueue(t *testing.T) {
 	f := newFakeSonarr(t, true,
 		fakeSeason{Number: 1, Monitored: true, Episodes: 10},
 		fakeSeason{Number: 2, Monitored: true, Episodes: 10, Files: 10},
 	)
 	f.queue = `[{"seriesId":24,"seasonNumber":1,"status":"failed","title":"S01 pack"}]`
+	f.downloadClientConfig = `{"autoRedownloadFailed":false}`
 	if got := checkSeasons(t, f, []int{2}); got.Status != StatusCompleted {
 		t.Fatalf("season 2 request status = %+v, want completed despite season 1's failed download", got)
 	}
-	if got := checkSeasons(t, f, []int{1}); got.Outcome != OutcomeFailed {
-		t.Fatalf("season 1 request status = %+v, want a failed outcome", got)
+	if f.configReads != 0 {
+		t.Fatalf("season 2 request read the download client settings %d times, want none", f.configReads)
 	}
-	if got := checkSeasons(t, f, nil); got.Outcome != OutcomeFailed {
-		t.Fatalf("whole-series request status = %+v, want a failed outcome", got)
+	const message = "external queue failed for S01 pack: failed"
+	if got := checkSeasons(t, f, []int{1}); got.Status != StatusFailed || got.Message != message {
+		t.Fatalf("season 1 request status = %+v, want failed with %q", got, message)
+	}
+	if got := checkSeasons(t, f, nil); got.Status != StatusFailed || got.Message != message {
+		t.Fatalf("whole-series request status = %+v, want failed with %q", got, message)
+	}
+
+	// While Sonarr looks for another release, the season stays queued.
+	f.downloadClientConfig = `{"autoRedownloadFailed":true}`
+	if got := checkSeasons(t, f, []int{1}); got.Status != StatusQueued || got.Message != message+"; Sonarr is looking for another release" {
+		t.Fatalf("season 1 request status = %+v, want queued while Sonarr looks for another release", got)
 	}
 }
 

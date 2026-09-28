@@ -46,6 +46,25 @@ settings.
 - While any of a request's downloads has failed, no progress is reported for
   it.
 
+## Failed downloads
+
+When Sonarr or Radarr reports one of a request's downloads as failed, the
+plugin reads the service's Redownload Failed setting (Settings > Download
+Clients > Failed Download Handling) to decide what Silo should do.
+
+- With it on, the default, the service blocklists the release and searches
+  for another, so the request stays in progress, with a message that the
+  download failed and the service is looking for another release.
+- With it off, nothing fetches the title again, so the plugin reports that
+  server's part of the request as failed, with the reason. Silo marks the
+  request failed, and an admin can retry it.
+- When the setting cannot be read, the plugin treats it as on, so a
+  transient error never fails a request.
+
+The setting is read only while a request has a failed download, so other
+status checks cost no extra call. A season request looks only at the
+downloads for its seasons.
+
 ## Build
 
 ```sh

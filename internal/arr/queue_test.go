@@ -1,9 +1,14 @@
 package arr
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/httpclient"
 )
 
 func TestEvaluateQueueFailureWinsOverDownloading(t *testing.T) {
@@ -352,29 +357,39 @@ func TestEvaluateProgressDecodesQueueDetails(t *testing.T) {
 	}
 }
 
+// A failed download reports no progress, even while the service looks for
+// another release and the target stays queued.
 func TestStatusFromQueueAttachesProgressWhileLive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/config/downloadclient" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"autoRedownloadFailed":true}`))
+	}))
+	defer server.Close()
+	client := httpclient.New(server.URL, "radarr-key", server.Client())
+
 	cases := []struct {
 		name     string
 		items    []QueueResource
 		status   Status
-		outcome  Outcome
 		progress bool
 	}{
-		{"queued", []QueueResource{{DownloadID: "a", Status: "queued", Size: 10, SizeLeft: 10}}, StatusQueued, "", true},
-		{"downloading", []QueueResource{{DownloadID: "a", Status: "downloading", TrackedDownloadState: "downloading", Size: 10, SizeLeft: 4}}, StatusDownloading, "", true},
-		{"import blocked", []QueueResource{{DownloadID: "a", Status: "completed", TrackedDownloadStatus: "warning", TrackedDownloadState: "importBlocked", Size: 10}}, StatusDownloading, "", true},
-		{"import pending", []QueueResource{{DownloadID: "a", Status: "completed", TrackedDownloadStatus: "ok", TrackedDownloadState: "importPending", Size: 10}}, StatusDownloading, "", true},
+		{"queued", []QueueResource{{DownloadID: "a", Status: "queued", Size: 10, SizeLeft: 10}}, StatusQueued, true},
+		{"downloading", []QueueResource{{DownloadID: "a", Status: "downloading", TrackedDownloadState: "downloading", Size: 10, SizeLeft: 4}}, StatusDownloading, true},
+		{"import blocked", []QueueResource{{DownloadID: "a", Status: "completed", TrackedDownloadStatus: "warning", TrackedDownloadState: "importBlocked", Size: 10}}, StatusDownloading, true},
+		{"import pending", []QueueResource{{DownloadID: "a", Status: "completed", TrackedDownloadStatus: "ok", TrackedDownloadState: "importPending", Size: 10}}, StatusDownloading, true},
 		{"failed", []QueueResource{
 			{DownloadID: "a", Status: "downloading", TrackedDownloadState: "downloading", Size: 10, SizeLeft: 4},
 			{DownloadID: "b", Status: "failed", Size: 10, SizeLeft: 10},
-		}, StatusQueued, OutcomeFailed, false},
-		{"empty queue", nil, StatusQueued, "", false},
+		}, StatusQueued, false},
+		{"empty queue", nil, StatusQueued, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := statusFromQueue("radarr", 42, tc.items)
-			if got.Status != tc.status || got.Outcome != tc.outcome {
-				t.Fatalf("status = %q/%q, want %q/%q", got.Status, got.Outcome, tc.status, tc.outcome)
+			got := statusFromQueue(context.Background(), client, "radarr", 42, tc.items)
+			if got.Status != tc.status {
+				t.Fatalf("status = %q, want %q", got.Status, tc.status)
 			}
 			if (got.Progress != nil) != tc.progress {
 				t.Fatalf("progress = %+v, want present=%v", got.Progress, tc.progress)
