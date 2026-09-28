@@ -10,6 +10,25 @@ The plugin is stateless: it stores nothing. All credentials and per-connection
 configuration (service endpoint, API key, root folder, quality profile, tags,
 default/4K/anime flags, etc.) are supplied by the Silo host on every call.
 
+## Season requests
+
+The plugin declares `supports_seasons`, so Silo can send it a series request
+that names seasons, including a request for the seasons a series in the
+library is missing.
+
+- A new series is added with only the requested seasons monitored, and the
+  add-time search covers only them. Seasons Sonarr learns of later stay
+  unmonitored.
+- A series Sonarr already has keeps its other seasons as they are. The
+  requested seasons, and every episode in them, are monitored and searched.
+- A repeated request changes nothing more, and does not search a season whose
+  aired episodes are all on disk.
+- A request counts as complete when the aired, monitored episodes of its
+  seasons are on disk; downloads for other seasons do not affect it.
+
+The connection's Monitor policy applies only to whole-series requests. Radarr
+ignores seasons.
+
 ## Build
 
 ```sh

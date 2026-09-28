@@ -3,9 +3,12 @@ package arr
 import "strings"
 
 type QueueResource struct {
-	ID                    int    `json:"id,omitempty"`
-	MovieID               int    `json:"movieId,omitempty"`
-	SeriesID              int    `json:"seriesId,omitempty"`
+	ID       int `json:"id,omitempty"`
+	MovieID  int `json:"movieId,omitempty"`
+	SeriesID int `json:"seriesId,omitempty"`
+	// SeasonNumber is the Sonarr season the download belongs to; nil when
+	// the server does not report one.
+	SeasonNumber          *int   `json:"seasonNumber,omitempty"`
 	Title                 string `json:"title,omitempty"`
 	Status                string `json:"status,omitempty"`
 	TrackedDownloadStatus string `json:"trackedDownloadStatus,omitempty"`

@@ -2,11 +2,13 @@ package arr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/httpclient"
 )
@@ -43,7 +45,17 @@ type seriesResource struct {
 	Monitored        bool             `json:"monitored"`
 	SeriesType       string           `json:"seriesType,omitempty"`
 	Tags             []int            `json:"tags,omitempty"`
+	Seasons          []seasonResource `json:"seasons,omitempty"`
+	MonitorNewItems  string           `json:"monitorNewItems,omitempty"`
 	AddOptions       addSeriesOptions `json:"addOptions,omitempty"`
+}
+
+// seasonResource is one entry of a Sonarr series' seasons list.
+type seasonResource struct {
+	SeasonNumber int  `json:"seasonNumber"`
+	Monitored    bool `json:"monitored"`
+	// Statistics is read-only; it is nil in what the plugin sends.
+	Statistics *seriesStatisticsSubset `json:"statistics,omitempty"`
 }
 
 type addSeriesOptions struct {
@@ -58,13 +70,21 @@ type addSeriesOptions struct {
 type seriesStatusResource struct {
 	ID         int                    `json:"id,omitempty"`
 	Statistics seriesStatisticsSubset `json:"statistics"`
+	Seasons    []seasonResource       `json:"seasons"`
 }
 
 type seriesStatisticsSubset struct {
-	// EpisodeCount counts only episodes that have aired and are monitored, so it
-	// does not grow with an ongoing show's unaired episodes.
+	// EpisodeCount counts only episodes that have aired and are monitored (or
+	// have a file), so it does not grow with an ongoing show's unaired
+	// episodes. Sonarr reports it per series and per season.
 	EpisodeCount     int `json:"episodeCount"`
 	EpisodeFileCount int `json:"episodeFileCount"`
+}
+
+// complete reports whether every counted episode is on disk. Zero counted
+// episodes is not completion: a freshly added series has none yet.
+func (s *seriesStatisticsSubset) complete() bool {
+	return s != nil && s.EpisodeCount > 0 && s.EpisodeFileCount >= s.EpisodeCount
 }
 
 func NewSonarrClient(httpClient *http.Client) *SonarrClient {
@@ -93,6 +113,17 @@ func (c *SonarrClient) ListSeriesIntegrationOptions(ctx context.Context, integra
 	}, nil
 }
 
+// SubmitSeries adds the requested series to Sonarr, or adopts it when Sonarr
+// already has it.
+//
+// A request for the whole series (no seasons) adds it under the connection's
+// monitor policy and adopts an existing series as it is. A request that names
+// seasons acquires only those: a new series is added with only the requested
+// seasons monitored, and an existing one has the requested seasons monitored
+// and searched while its other seasons are left as they are. The requested
+// seasons replace the monitor policy, which would otherwise pick seasons of
+// its own. Repeating a request converges: seasons already monitored stay so,
+// and a season with every aired episode on disk is not searched again.
 func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integration Instance) (FulfillmentResult, error) {
 	if req.MediaType != MediaTypeSeries {
 		return FulfillmentResult{}, fmt.Errorf("sonarr: request is not a series")
@@ -110,27 +141,47 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 		return FulfillmentResult{}, err
 	}
 	if found {
-		return resultFromSeries(existing), nil
+		return c.adoptSeries(ctx, client, existing, req, integration)
 	}
 
 	series, err := c.lookupSeries(ctx, client, *req.TVDBID)
 	if err != nil {
 		return FulfillmentResult{}, err
 	}
+	search := searchOnAdd(integration)
 	series.RootFolderPath = integration.RootFolder
 	series.QualityProfileID = *integration.QualityProfileID
 	series.SeasonFolder = BoolOption(integration.Options, "season_folder", true)
 	series.Monitored = BoolOption(integration.Options, "monitored", true)
 	series.SeriesType = StringOption(integration.Options, "series_type", "standard")
 	series.Tags = integration.Tags
-	series.AddOptions = addSeriesOptions{
-		Monitor: StringOption(integration.Options, "monitor", DefaultSeriesMonitorPolicy),
-		SearchForMissingEpisodes: BoolOption(
-			integration.Options,
-			"search_for_missing_episodes",
-			BoolOption(integration.Options, "search_on_add", true),
-		),
-		SearchForCutoffUnmetEpisodes: BoolOption(integration.Options, "search_for_cutoff_unmet", false),
+	if len(req.Seasons) > 0 {
+		seasons, err := monitorOnlySeasons(series.Seasons, req.Seasons)
+		if err != nil {
+			return FulfillmentResult{}, err
+		}
+		// Monitored stays true: an unmonitored series grabs nothing. Leaving
+		// addOptions.monitor unset makes Sonarr take each season's monitored
+		// flag as sent, and searchForMissingEpisodes then searches only the
+		// episodes of those seasons. Seasons Sonarr learns of later are left
+		// unmonitored; the host requests them when they are wanted.
+		series.Monitored = true
+		series.Seasons = seasons
+		series.MonitorNewItems = "none"
+		series.AddOptions = addSeriesOptions{
+			SearchForMissingEpisodes:     search,
+			SearchForCutoffUnmetEpisodes: BoolOption(integration.Options, "search_for_cutoff_unmet", false),
+		}
+	} else {
+		// The whole series follows the connection's monitor policy, which
+		// decides the seasons itself.
+		series.Seasons = nil
+		series.MonitorNewItems = ""
+		series.AddOptions = addSeriesOptions{
+			Monitor:                      StringOption(integration.Options, "monitor", DefaultSeriesMonitorPolicy),
+			SearchForMissingEpisodes:     search,
+			SearchForCutoffUnmetEpisodes: BoolOption(integration.Options, "search_for_cutoff_unmet", false),
+		}
 	}
 
 	var created seriesResource
@@ -139,7 +190,7 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 		// or the POST may have succeeded even though its response was lost.
 		// Recover either case without hiding a genuine add failure.
 		if existing, found, lookupErr := c.findSeriesByTVDBID(ctx, client, *req.TVDBID); lookupErr == nil && found {
-			return resultFromSeries(existing), nil
+			return c.adoptSeries(ctx, client, existing, req, integration)
 		}
 		return FulfillmentResult{}, postErr
 	}
@@ -153,6 +204,169 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 		return AcceptedWithoutResponse("sonarr"), nil
 	}
 	return resultFromSeries(created), nil
+}
+
+// searchOnAdd reports whether the connection searches for what it adds.
+func searchOnAdd(integration Instance) bool {
+	return BoolOption(
+		integration.Options,
+		"search_for_missing_episodes",
+		BoolOption(integration.Options, "search_on_add", true),
+	)
+}
+
+// monitorOnlySeasons returns the series' seasons with only the requested ones
+// monitored. It fails when Sonarr knows none of them, since adding the series
+// would then acquire nothing.
+func monitorOnlySeasons(available []seasonResource, requested []int) ([]seasonResource, error) {
+	out := make([]seasonResource, 0, len(available))
+	matched := false
+	for _, season := range available {
+		monitored := slices.Contains(requested, season.SeasonNumber)
+		matched = matched || monitored
+		out = append(out, seasonResource{SeasonNumber: season.SeasonNumber, Monitored: monitored})
+	}
+	if !matched {
+		return nil, noRequestedSeasonError(requested)
+	}
+	return out, nil
+}
+
+func noRequestedSeasonError(requested []int) error {
+	return fmt.Errorf("sonarr: the series has none of the requested seasons (%s) yet", joinInts(requested))
+}
+
+// adoptSeries takes over a series Sonarr already has. A whole-series request
+// adopts it unchanged. A season request adds the requested seasons to what the
+// series monitors and searches them.
+func (c *SonarrClient) adoptSeries(ctx context.Context, client *httpclient.Client, existing seriesResource, req Request, integration Instance) (FulfillmentResult, error) {
+	if len(req.Seasons) == 0 {
+		return resultFromSeries(existing), nil
+	}
+	if err := c.addSeasons(ctx, client, existing.ID, req.Seasons, searchOnAdd(integration)); err != nil {
+		return FulfillmentResult{}, err
+	}
+	return resultFromSeries(existing), nil
+}
+
+// addSeasons monitors the requested seasons of an existing series, every
+// episode in them included, and searches those seasons when search is set. It
+// never unmonitors anything. The series is read and written back whole, so
+// fields this client does not model survive the update.
+func (c *SonarrClient) addSeasons(ctx context.Context, client *httpclient.Client, seriesID int, requested []int, search bool) error {
+	path := "/api/v3/series/" + strconv.Itoa(seriesID)
+	var raw map[string]any
+	if err := client.GetJSON(ctx, path, &raw); err != nil {
+		return err
+	}
+	var current struct {
+		Monitored bool             `json:"monitored"`
+		Seasons   []seasonResource `json:"seasons"`
+	}
+	if err := remarshal(raw, &current); err != nil {
+		return fmt.Errorf("sonarr: read series %d: %w", seriesID, err)
+	}
+
+	changed := !current.Monitored
+	known := false
+	var toSearch []int
+	for _, season := range current.Seasons {
+		if !slices.Contains(requested, season.SeasonNumber) {
+			continue
+		}
+		known = true
+		changed = changed || !season.Monitored
+		// A monitored season's statistics count its aired episodes, so one
+		// with all of them on disk has nothing to fetch and a repeated
+		// request does not search it again. An unmonitored season's
+		// statistics leave out its missing episodes, so it is searched.
+		if !season.Monitored || !season.Statistics.complete() {
+			toSearch = append(toSearch, season.SeasonNumber)
+		}
+	}
+	if !known {
+		return noRequestedSeasonError(requested)
+	}
+
+	if changed {
+		raw["monitored"] = true
+		seasons, _ := raw["seasons"].([]any)
+		for _, entry := range seasons {
+			season, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if n, ok := season["seasonNumber"].(float64); ok && slices.Contains(requested, int(n)) {
+				season["monitored"] = true
+			}
+		}
+		// Sonarr monitors every episode of a season whose flag turns on.
+		if err := client.DoJSON(ctx, http.MethodPut, path, raw, nil); err != nil {
+			return err
+		}
+	}
+
+	// A season already monitored can still hold unmonitored episodes (a
+	// "future" or "recent" policy leaves the aired ones off), which Sonarr
+	// would neither search nor count. Monitor them too.
+	if err := c.monitorSeasonEpisodes(ctx, client, seriesID, requested); err != nil {
+		return err
+	}
+
+	if !search {
+		return nil
+	}
+	for _, seasonNumber := range toSearch {
+		command := map[string]any{"name": "SeasonSearch", "seriesId": seriesID, "seasonNumber": seasonNumber}
+		if err := client.PostJSON(ctx, "/api/v3/command", command, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type episodeResource struct {
+	ID           int  `json:"id"`
+	SeasonNumber int  `json:"seasonNumber"`
+	Monitored    bool `json:"monitored"`
+}
+
+// monitorSeasonEpisodes monitors the unmonitored episodes of the requested
+// seasons.
+func (c *SonarrClient) monitorSeasonEpisodes(ctx context.Context, client *httpclient.Client, seriesID int, requested []int) error {
+	values := url.Values{}
+	values.Set("seriesId", strconv.Itoa(seriesID))
+	var episodes []episodeResource
+	if err := client.GetJSON(ctx, "/api/v3/episode?"+values.Encode(), &episodes); err != nil {
+		return err
+	}
+	var ids []int
+	for _, episode := range episodes {
+		if !episode.Monitored && slices.Contains(requested, episode.SeasonNumber) {
+			ids = append(ids, episode.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	body := map[string]any{"episodeIds": ids, "monitored": true}
+	return client.DoJSON(ctx, http.MethodPut, "/api/v3/episode/monitor", body, nil)
+}
+
+func remarshal(from, to any) error {
+	data, err := json.Marshal(from)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, to)
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, v := range values {
+		parts = append(parts, strconv.Itoa(v))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (c *SonarrClient) findSeriesByTVDBID(ctx context.Context, client *httpclient.Client, tvdbID int) (seriesResource, bool, error) {
@@ -185,19 +399,36 @@ func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integ
 	if err != nil {
 		return FulfillmentStatus{}, err
 	}
+	if len(req.Seasons) > 0 {
+		// Downloads for seasons the request did not ask for are not its
+		// progress, and their failure is not its failure.
+		queues = slices.DeleteFunc(queues, func(q QueueResource) bool {
+			return q.SeasonNumber != nil && !slices.Contains(req.Seasons, *q.SeasonNumber)
+		})
+	}
 	// Imported episodes leave Sonarr's queue, so an empty queue alone cannot say
 	// whether the series was fulfilled — see the equivalent note in
 	// RadarrClient.CheckMovieStatus. A series has no hasFile, so the closest
 	// analogue is "every aired, monitored episode is on disk". Anything short of
 	// that stays queued: the queue goes briefly empty between grabs, and
-	// completing there would strand a half-downloaded series.
+	// completing there would strand a half-downloaded series. A season request
+	// counts only the episodes of its seasons.
 	if len(queues) == 0 {
 		series, err := c.seriesByID(ctx, client, seriesID)
 		if err != nil {
 			return FulfillmentStatus{}, err
 		}
 		stats := series.Statistics
-		if stats.EpisodeCount > 0 && stats.EpisodeFileCount >= stats.EpisodeCount {
+		if len(req.Seasons) > 0 {
+			stats = seriesStatisticsSubset{}
+			for _, season := range series.Seasons {
+				if season.Statistics != nil && slices.Contains(req.Seasons, season.SeasonNumber) {
+					stats.EpisodeCount += season.Statistics.EpisodeCount
+					stats.EpisodeFileCount += season.Statistics.EpisodeFileCount
+				}
+			}
+		}
+		if stats.complete() {
 			return FulfillmentStatus{
 				Status:          StatusCompleted,
 				IntegrationKind: "sonarr",

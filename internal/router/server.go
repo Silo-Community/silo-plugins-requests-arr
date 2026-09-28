@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,7 +41,27 @@ func descriptorToRequest(d *pluginv1.RequestDescriptor) arr.Request {
 		n := atoiSafe(v)
 		r.TVDBID = &n
 	}
+	if r.MediaType == arr.MediaTypeSeries {
+		r.Seasons = requestedSeasons(d.GetSeasons())
+	}
 	return r
+}
+
+// requestedSeasons normalizes the descriptor's seasons: sorted, without
+// duplicates or negatives. None means the whole series.
+func requestedSeasons(seasons []int32) []int {
+	out := make([]int, 0, len(seasons))
+	for _, s := range seasons {
+		if s >= 0 {
+			out = append(out, int(s))
+		}
+	}
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func kindForMediaType(mt arr.MediaType) string {

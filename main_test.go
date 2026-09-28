@@ -95,3 +95,17 @@ func TestMonitorFieldMatchesSeriesMonitorPolicies(t *testing.T) {
 		t.Errorf("monitor options = %v, want %v", values, arr.SeriesMonitorPolicies)
 	}
 }
+
+// The host sends a request for only the missing seasons of a series it already
+// has only to plugins that declare supports_seasons, and it reads the flag from
+// the stored manifest. The manifest loader drops unknown keys, so a misspelt
+// key would silently turn the feature off.
+func TestManifestDeclaresSeasonSupport(t *testing.T) {
+	m, err := publicmanifest.LoadWithChecksum(manifestJSON, version)
+	if err != nil {
+		t.Fatalf("LoadWithChecksum: %v", err)
+	}
+	if !m.GetCapabilities()[0].GetRequestRouter().GetSupportsSeasons() {
+		t.Fatalf("request_router.supports_seasons = false, want true")
+	}
+}

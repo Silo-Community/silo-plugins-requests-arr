@@ -36,6 +36,9 @@
       "id": "arr",
       "display_name": "Sonarr / Radarr",
       "description": "Fulfills movie/series requests against multi-instance Sonarr/Radarr.",
+      "request_router": {
+        "supports_seasons": true
+      },
       "config_schema": [
         {
           "key": "connection",
@@ -114,7 +117,7 @@
               {
                 "key": "monitor",
                 "label": "Monitor",
-                "description": "Episodes Sonarr monitors when a series is added. With Search on add on, Sonarr immediately searches every monitored episode that has aired, so All episodes searches a long-running show's entire back catalog.",
+                "description": "Episodes Sonarr monitors when a series is added. With Search on add on, Sonarr immediately searches every monitored episode that has aired, so All episodes searches a long-running show's entire back catalog. A request for particular seasons monitors and searches only those seasons instead.",
                 "control": "ADMIN_FORM_CONTROL_SELECT",
                 "default_value": "all",
                 "show_when": [
