@@ -67,7 +67,7 @@ type Instance struct {
 	AnimeRootFolder       string
 	AnimeQualityProfileID *int
 	AnimeTags             []int
-	Options               map[string]any // search_on_add, minimum_availability, series_type, season_folder
+	Options               map[string]any // search_on_add, minimum_availability, series_type, season_folder, monitor
 }
 
 type FulfillmentResult struct {
