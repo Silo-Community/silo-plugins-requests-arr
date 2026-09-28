@@ -5,10 +5,27 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/httpclient"
 )
+
+// SeriesMonitorPolicies are the Sonarr v4 addOptions.monitor values a
+// connection may choose. The policy decides which episodes a new series
+// monitors, and so how many episodes search_on_add asks the indexers for:
+// "all" searches every aired episode of the series.
+var SeriesMonitorPolicies = []string{"all", "future", "recent", "lastSeason", "firstSeason", "pilot"}
+
+// DefaultSeriesMonitorPolicy applies when a connection has no monitor setting.
+// It must match the manifest's default_value so the admin form shows the
+// policy that is actually sent.
+const DefaultSeriesMonitorPolicy = "all"
+
+// IsSeriesMonitorPolicy reports whether policy is one of SeriesMonitorPolicies.
+func IsSeriesMonitorPolicy(policy string) bool {
+	return slices.Contains(SeriesMonitorPolicies, policy)
+}
 
 type SonarrClient struct {
 	httpClient *http.Client
@@ -107,7 +124,7 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 	series.SeriesType = StringOption(integration.Options, "series_type", "standard")
 	series.Tags = integration.Tags
 	series.AddOptions = addSeriesOptions{
-		Monitor: StringOption(integration.Options, "monitor", "all"),
+		Monitor: StringOption(integration.Options, "monitor", DefaultSeriesMonitorPolicy),
 		SearchForMissingEpisodes: BoolOption(
 			integration.Options,
 			"search_for_missing_episodes",

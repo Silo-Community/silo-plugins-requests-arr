@@ -1,10 +1,13 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
+
+	"github.com/Silo-Community/silo-plugins-requests-arr/internal/arr"
 )
 
 func TestAdminFormLayout(t *testing.T) {
@@ -61,5 +64,34 @@ func TestEmbeddedManifestLoads(t *testing.T) {
 	}
 	if len(m.GetCapabilities()) != 1 || m.GetCapabilities()[0].GetType() != "request_router.v1" {
 		t.Fatalf("expected one request_router.v1 capability, got %+v", m.GetCapabilities())
+	}
+}
+
+// The monitor select must offer exactly the policies the plugin accepts, and
+// default to the policy the plugin falls back to, so the form never shows a
+// policy other than the one Sonarr receives.
+func TestMonitorFieldMatchesSeriesMonitorPolicies(t *testing.T) {
+	m, err := publicmanifest.LoadWithChecksum(manifestJSON, version)
+	if err != nil {
+		t.Fatalf("LoadWithChecksum: %v", err)
+	}
+	var field *pluginv1.AdminFormField
+	for _, f := range m.GetCapabilities()[0].GetConfigSchema()[0].GetAdminForm().GetFields() {
+		if f.GetKey() == "monitor" {
+			field = f
+		}
+	}
+	if field == nil {
+		t.Fatal("manifest has no monitor field")
+	}
+	if got := field.GetDefaultValue().GetStringValue(); got != arr.DefaultSeriesMonitorPolicy {
+		t.Errorf("monitor default_value = %q, want %q", got, arr.DefaultSeriesMonitorPolicy)
+	}
+	var values []string
+	for _, o := range field.GetOptions() {
+		values = append(values, o.GetValue())
+	}
+	if !slices.Equal(values, arr.SeriesMonitorPolicies) {
+		t.Errorf("monitor options = %v, want %v", values, arr.SeriesMonitorPolicies)
 	}
 }

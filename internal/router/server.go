@@ -247,6 +247,13 @@ func (s *Server) Validate(ctx context.Context, req *pluginv1.ValidateRequest) (*
 	if in.IsDefault4K && !in.Is4K {
 		fieldErrors["is_default_4k"] = "the 4K default must be a 4K server"
 	}
+	// Sonarr rejects an unknown monitor value, so catch it on save rather than
+	// on the first request. An empty value falls back to the default policy.
+	if in.Kind == "sonarr" {
+		if policy := arr.StringOption(in.Options, "monitor", ""); policy != "" && !arr.IsSeriesMonitorPolicy(policy) {
+			fieldErrors["monitor"] = fmt.Sprintf("unknown monitor policy %q", policy)
+		}
+	}
 	// The service chosen must be the one at the address. Detection that fails
 	// for any other reason does not block the save: the options probe already
 	// reports whether the server can be reached.

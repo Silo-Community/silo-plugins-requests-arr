@@ -40,7 +40,7 @@
         {
           "key": "connection",
           "title": "Connection",
-          "json_schema": "{\"type\":\"object\",\"properties\":{\"service_kind\":{\"type\":\"string\"},\"root_folder\":{\"type\":\"string\"},\"quality_profile_id\":{\"type\":\"integer\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},\"is_default\":{\"type\":\"boolean\"},\"is_4k\":{\"type\":\"boolean\"},\"is_default_4k\":{\"type\":\"boolean\"},\"search_on_add\":{\"type\":\"boolean\"},\"minimum_availability\":{\"type\":\"string\"},\"series_type\":{\"type\":\"string\"},\"season_folder\":{\"type\":\"boolean\"},\"anime_enabled\":{\"type\":\"boolean\"},\"anime_root_folder\":{\"type\":\"string\"},\"anime_quality_profile_id\":{\"type\":\"integer\"},\"anime_tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}}}",
+          "json_schema": "{\"type\":\"object\",\"properties\":{\"service_kind\":{\"type\":\"string\"},\"root_folder\":{\"type\":\"string\"},\"quality_profile_id\":{\"type\":\"integer\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},\"is_default\":{\"type\":\"boolean\"},\"is_4k\":{\"type\":\"boolean\"},\"is_default_4k\":{\"type\":\"boolean\"},\"search_on_add\":{\"type\":\"boolean\"},\"monitor\":{\"type\":\"string\"},\"minimum_availability\":{\"type\":\"string\"},\"series_type\":{\"type\":\"string\"},\"season_folder\":{\"type\":\"boolean\"},\"anime_enabled\":{\"type\":\"boolean\"},\"anime_root_folder\":{\"type\":\"string\"},\"anime_quality_profile_id\":{\"type\":\"integer\"},\"anime_tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}}}",
           "admin_form": {
             "submit_label": "Save connection",
             "fields": [
@@ -110,6 +110,47 @@
                 "label": "Search on add",
                 "control": "ADMIN_FORM_CONTROL_SWITCH",
                 "default_value": true
+              },
+              {
+                "key": "monitor",
+                "label": "Monitor",
+                "description": "Episodes Sonarr monitors when a series is added. With Search on add on, Sonarr immediately searches every monitored episode that has aired, so All episodes searches a long-running show's entire back catalog.",
+                "control": "ADMIN_FORM_CONTROL_SELECT",
+                "default_value": "all",
+                "show_when": [
+                  {
+                    "field": "service_kind",
+                    "equals": [
+                      "sonarr"
+                    ]
+                  }
+                ],
+                "options": [
+                  {
+                    "value": "all",
+                    "label": "All episodes"
+                  },
+                  {
+                    "value": "future",
+                    "label": "Future episodes"
+                  },
+                  {
+                    "value": "recent",
+                    "label": "Recent episodes (last 90 days and future)"
+                  },
+                  {
+                    "value": "lastSeason",
+                    "label": "Last season"
+                  },
+                  {
+                    "value": "firstSeason",
+                    "label": "First season"
+                  },
+                  {
+                    "value": "pilot",
+                    "label": "Pilot episode"
+                  }
+                ]
               },
               {
                 "key": "minimum_availability",
@@ -244,6 +285,7 @@
                   "is_4k",
                   "is_default_4k",
                   "search_on_add",
+                  "monitor",
                   "minimum_availability",
                   "series_type",
                   "season_folder"
