@@ -3,7 +3,7 @@ module github.com/Silo-Community/silo-plugins-requests-arr
 go 1.26.3
 
 require (
-	github.com/Silo-Server/silo-plugin-sdk v0.18.1-0.20260928194839-1abd582d0304
+	github.com/Silo-Server/silo-plugin-sdk v0.19.0
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 )
