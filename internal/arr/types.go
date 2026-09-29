@@ -10,10 +10,8 @@
 //   - Instance.APIKeyRef (not APIKey) — the copied clients and tests reference
 //     integration.APIKeyRef.
 //   - Instance.Enabled is present (routing.go reads it).
-//   - FulfillmentResult / FulfillmentStatus carry IntegrationKind, and
-//     FulfillmentStatus carries Outcome (with the Outcome type + OutcomeFailed
-//     const) — the copied resources.go / radarr / sonarr code and tests set
-//     these fields.
+//   - FulfillmentResult / FulfillmentStatus carry IntegrationKind — the copied
+//     resources.go / radarr / sonarr code and tests set it.
 package arr
 
 type MediaType string
@@ -30,13 +28,6 @@ const (
 	StatusDownloading Status = "downloading"
 	StatusCompleted   Status = "completed"
 	StatusFailed      Status = "failed"
-)
-
-// Outcome is the terminal-vs-active classification carried alongside Status.
-type Outcome string
-
-const (
-	OutcomeFailed Outcome = "failed"
 )
 
 // Request is the per-target view the arr submitters need.
@@ -81,13 +72,12 @@ type FulfillmentResult struct {
 
 type FulfillmentStatus struct {
 	Status          Status
-	Outcome         Outcome
 	IntegrationKind string
 	ExternalID      string
 	ExternalStatus  string
 	Message         string
 	// Progress is set while the target is queued or downloading and the
-	// service has queue items for it.
+	// service has queue items for it, none of them failed.
 	Progress *Progress
 }
 

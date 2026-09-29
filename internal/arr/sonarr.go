@@ -437,7 +437,7 @@ func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integ
 			}, nil
 		}
 	}
-	return statusFromQueue("sonarr", seriesID, queues), nil
+	return statusFromQueue(ctx, client, "sonarr", seriesID, queues), nil
 }
 
 func (c *SonarrClient) seriesByID(ctx context.Context, client *httpclient.Client, seriesID int) (seriesStatusResource, error) {

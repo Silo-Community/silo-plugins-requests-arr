@@ -81,34 +81,60 @@ func AcceptedWithoutResponse(kind string) FulfillmentResult {
 	}
 }
 
-// StatusFromQueueEvaluation translates an arrclient.QueueEvaluation into the
-// FulfillmentStatus shape shared by Radarr and Sonarr clients.
-func StatusFromQueueEvaluation(kind string, externalID int, evaluation QueueEvaluation) FulfillmentStatus {
-	status := StatusQueued
-	outcome := Outcome("")
-	if evaluation.State == QueueStateDownloading {
-		status = StatusDownloading
+// downloadClientConfigResource is the part of GET /api/v3/config/downloadclient
+// the plugin reads; Radarr and Sonarr serve the same shape.
+type downloadClientConfigResource struct {
+	// AutoRedownloadFailed is "Redownload Failed" under Failed Download
+	// Handling: once a download fails, blocklist its release and search for
+	// another. Both services default it on.
+	AutoRedownloadFailed *bool `json:"autoRedownloadFailed"`
+}
+
+// redownloadsFailed reports whether the service searches for another release
+// after a download fails. It assumes so when the setting cannot be read, so a
+// transient error never fails a request the service may still recover.
+func redownloadsFailed(ctx context.Context, client *httpclient.Client) bool {
+	var config downloadClientConfigResource
+	if err := client.GetJSON(ctx, "/api/v3/config/downloadclient", &config); err != nil {
+		return true
 	}
-	if evaluation.State == QueueStateFailed {
-		outcome = OutcomeFailed
-	}
-	return FulfillmentStatus{
-		Status:          status,
-		Outcome:         outcome,
+	return config.AutoRedownloadFailed == nil || *config.AutoRedownloadFailed
+}
+
+// StatusFromQueueEvaluation translates a QueueEvaluation into the
+// FulfillmentStatus shape shared by Radarr and Sonarr clients. A failed
+// download fails the target only when the service will not search for another
+// release (redownload is false); while it searches, the target stays queued.
+func StatusFromQueueEvaluation(kind string, externalID int, evaluation QueueEvaluation, redownload bool) FulfillmentStatus {
+	status := FulfillmentStatus{
+		Status:          StatusQueued,
 		IntegrationKind: kind,
 		ExternalID:      strconv.Itoa(externalID),
 		ExternalStatus:  evaluation.ExternalStatus,
 		Message:         evaluation.Message,
 	}
+	switch evaluation.State {
+	case QueueStateDownloading:
+		status.Status = StatusDownloading
+	case QueueStateFailed:
+		if redownload {
+			status.Message += "; " + KindLabel(kind) + " is looking for another release"
+		} else {
+			status.Status = StatusFailed
+		}
+	}
+	return status
 }
 
-// statusFromQueue evaluates a target's queue items and, while the target is
-// still queued or downloading, reports how far its downloads are.
-func statusFromQueue(kind string, externalID int, queues []QueueResource) FulfillmentStatus {
+// statusFromQueue evaluates a target's queue items and, unless a download has
+// failed, reports how far its downloads are. Only a failed download costs a
+// further call, to ask whether the service will search for another release.
+func statusFromQueue(ctx context.Context, client *httpclient.Client, kind string, externalID int, queues []QueueResource) FulfillmentStatus {
 	evaluation := EvaluateQueue(queues)
-	status := StatusFromQueueEvaluation(kind, externalID, evaluation)
-	if evaluation.State == QueueStateQueued || evaluation.State == QueueStateDownloading {
-		status.Progress = EvaluateProgress(queues)
+	if evaluation.State == QueueStateFailed {
+		return StatusFromQueueEvaluation(kind, externalID, evaluation, redownloadsFailed(ctx, client))
 	}
+	status := StatusFromQueueEvaluation(kind, externalID, evaluation, false)
+	status.Progress = EvaluateProgress(queues)
 	return status
 }
