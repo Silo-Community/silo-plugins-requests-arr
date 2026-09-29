@@ -11,6 +11,7 @@ import (
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/httpclient"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/Silo-Community/silo-plugins-requests-arr/internal/arr"
 )
@@ -162,9 +163,26 @@ func (s *Server) CheckStatus(ctx context.Context, req *pluginv1.CheckStatusReque
 			Status:         string(st.Status),
 			ExternalStatus: st.ExternalStatus,
 			Message:        st.Message,
+			Progress:       progressToProto(st.Progress),
 		})
 	}
 	return &pluginv1.CheckStatusResponse{Statuses: statuses}, nil
+}
+
+func progressToProto(p *arr.Progress) *pluginv1.DownloadProgress {
+	if p == nil {
+		return nil
+	}
+	out := &pluginv1.DownloadProgress{
+		Phase:      p.Phase,
+		BytesTotal: p.BytesTotal,
+		BytesLeft:  p.BytesLeft,
+		Downloads:  int32(p.Downloads),
+	}
+	if p.EstimatedCompletion != nil {
+		out.EstimatedCompletion = timestamppb.New(*p.EstimatedCompletion)
+	}
+	return out
 }
 
 // validateDetectTimeout bounds the detection Validate runs on save, so a slow

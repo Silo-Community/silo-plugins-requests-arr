@@ -101,3 +101,14 @@ func StatusFromQueueEvaluation(kind string, externalID int, evaluation QueueEval
 		Message:         evaluation.Message,
 	}
 }
+
+// statusFromQueue evaluates a target's queue items and, while the target is
+// still queued or downloading, reports how far its downloads are.
+func statusFromQueue(kind string, externalID int, queues []QueueResource) FulfillmentStatus {
+	evaluation := EvaluateQueue(queues)
+	status := StatusFromQueueEvaluation(kind, externalID, evaluation)
+	if evaluation.State == QueueStateQueued || evaluation.State == QueueStateDownloading {
+		status.Progress = EvaluateProgress(queues)
+	}
+	return status
+}

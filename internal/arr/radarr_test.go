@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSubmitMovieAddsLookupResult(t *testing.T) {
@@ -326,6 +327,81 @@ func TestCheckMovieStatusReadsQueueDetails(t *testing.T) {
 	}
 	if status.Status != StatusDownloading || status.ExternalStatus != "downloading/downloading" {
 		t.Fatalf("status = %+v, want downloading", status)
+	}
+}
+
+// A movie in the queue reports how far its download is.
+func TestCheckMovieStatusReportsDownloadProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/queue/details" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[{"id":9,"movieId":42,"status":"downloading","trackedDownloadStatus":"ok","trackedDownloadState":"downloading",
+			"downloadId":"abc","size":2000000000.0,"sizeleft":500000000.0,"estimatedCompletionTime":"2026-09-28T12:10:00Z"}]`))
+	}))
+	defer server.Close()
+
+	status, err := NewRadarrClient(server.Client()).CheckMovieStatus(context.Background(), Request{
+		MediaType:  MediaTypeMovie,
+		TMDBID:     550,
+		ExternalID: "42",
+	}, Instance{Kind: "radarr", BaseURL: server.URL, APIKeyRef: "radarr-key"})
+	if err != nil {
+		t.Fatalf("CheckMovieStatus returned error: %v", err)
+	}
+	want := time.Date(2026, 9, 28, 12, 10, 0, 0, time.UTC)
+	got := status.Progress
+	if status.Status != StatusDownloading || got == nil {
+		t.Fatalf("status = %+v, want downloading with progress", status)
+	}
+	if got.Phase != PhaseDownloading || got.BytesTotal != 2000000000 || got.BytesLeft != 500000000 || got.Downloads != 1 {
+		t.Fatalf("progress = %+v, want downloading 500000000/2000000000 left over 1 download", got)
+	}
+	if got.EstimatedCompletion == nil || !got.EstimatedCompletion.Equal(want) {
+		t.Fatalf("estimated completion = %v, want %v", got.EstimatedCompletion, want)
+	}
+}
+
+// A finished download Radarr cannot import stays in the queue, either as
+// completed but still in the downloading state with a warning, or in the
+// importBlocked state. That is an import that needs attention, not a download
+// waiting to start, so the target stays downloading.
+func TestCheckMovieStatusReportsDownloadAwaitingImportFix(t *testing.T) {
+	cases := []struct {
+		name  string
+		state string
+	}{
+		{"completed but still downloading", "downloading"},
+		{"import blocked", "importBlocked"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v3/queue/details" {
+					t.Errorf("unexpected path %s", r.URL.Path)
+				}
+				_, _ = w.Write([]byte(`[{"id":9,"movieId":42,"status":"completed","trackedDownloadStatus":"warning","trackedDownloadState":"` + tc.state + `",
+					"statusMessages":[{"title":"Movie.2026.1080p","messages":["[C:\\downloads\\Movie.2026.1080p] is not a valid local path. You may need a Remote Path Mapping."]}],
+					"downloadId":"abc","size":2000.0,"sizeleft":0.0}]`))
+			}))
+			defer server.Close()
+
+			status, err := NewRadarrClient(server.Client()).CheckMovieStatus(context.Background(), Request{
+				MediaType:  MediaTypeMovie,
+				TMDBID:     550,
+				ExternalID: "42",
+			}, Instance{Kind: "radarr", BaseURL: server.URL, APIKeyRef: "radarr-key"})
+			if err != nil {
+				t.Fatalf("CheckMovieStatus returned error: %v", err)
+			}
+			got := status.Progress
+			if status.Status != StatusDownloading || got == nil {
+				t.Fatalf("status = %+v, want downloading with progress", status)
+			}
+			if got.Phase != PhaseImportBlocked || got.BytesTotal != 2000 || got.BytesLeft != 0 {
+				t.Fatalf("progress = %+v, want import_blocked with 0/2000 left", got)
+			}
+		})
 	}
 }
 

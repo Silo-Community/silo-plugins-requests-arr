@@ -29,6 +29,23 @@ library is missing.
 The connection's Monitor policy applies only to whole-series requests. Radarr
 ignores seasons.
 
+## Download progress
+
+The plugin declares `reports_download_progress` and reports how far a
+request's downloads are while they sit in the Sonarr or Radarr queue: a phase
+(waiting, downloading, paused, stalled, importing, or import blocked), the
+size and bytes left, and the latest estimated completion time. It reads the
+same queue the plugin already checks for the request's status, so it needs no
+settings.
+
+- A season pack counts once, although Sonarr lists it under every episode.
+- A season request counts only the downloads for its seasons.
+- While any of a request's downloads has no known size yet, the size and bytes
+  left are reported as 0, so Silo shows no percentage rather than an
+  overstated one.
+- While any of a request's downloads has failed, no progress is reported for
+  it.
+
 ## Build
 
 ```sh

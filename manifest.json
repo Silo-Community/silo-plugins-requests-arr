@@ -37,7 +37,8 @@
       "display_name": "Sonarr / Radarr",
       "description": "Fulfills movie/series requests against multi-instance Sonarr/Radarr.",
       "request_router": {
-        "supports_seasons": true
+        "supports_seasons": true,
+        "reports_download_progress": true
       },
       "config_schema": [
         {

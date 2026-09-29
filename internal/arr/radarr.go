@@ -173,8 +173,7 @@ func (c *RadarrClient) CheckMovieStatus(ctx context.Context, req Request, integr
 			}, nil
 		}
 	}
-	evaluation := EvaluateQueue(queues)
-	return StatusFromQueueEvaluation("radarr", movieID, evaluation), nil
+	return statusFromQueue("radarr", movieID, queues), nil
 }
 
 func (c *RadarrClient) movieByID(ctx context.Context, client *httpclient.Client, movieID int) (movieStatusResource, error) {
