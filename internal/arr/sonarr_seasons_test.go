@@ -494,6 +494,39 @@ func TestCheckSeriesStatusIgnoresOtherSeasonsInQueue(t *testing.T) {
 	}
 }
 
+// Sonarr v5 lists a release it is holding back once, with no season. It cannot
+// be tied to a season, so it neither keeps another season's request from
+// completing nor counts as that request's download; a whole-series request
+// still sees it.
+func TestCheckSeriesStatusIgnoresHeldReleaseWithoutSeason(t *testing.T) {
+	f := newFakeSonarr(t, true,
+		fakeSeason{Number: 1, Monitored: true, Episodes: 10},
+		fakeSeason{Number: 2, Monitored: true, Episodes: 10, Files: 10},
+	)
+	for _, status := range []string{"delay", "downloadClientUnavailable"} {
+		t.Run(status, func(t *testing.T) {
+			f.queue = `[{"id":7,"seriesId":24,"status":"` + status + `","title":"S01E03","size":900,"sizeleft":900}]`
+			if got := checkSeasons(t, f, []int{2}); got.Status != StatusCompleted {
+				t.Fatalf("season 2 request status = %+v, want completed despite a held release", got)
+			}
+			if got := checkSeasons(t, f, []int{1}); got.Status != StatusQueued || got.Progress != nil {
+				t.Fatalf("season 1 request status = %+v, want queued with no progress", got)
+			}
+			got := checkSeasons(t, f, nil)
+			if got.Status != StatusQueued || got.Progress == nil || got.Progress.Downloads != 1 {
+				t.Fatalf("whole-series request status = %+v, want queued with the held release", got)
+			}
+		})
+	}
+
+	// A download with no season is still the request's: only held releases
+	// are set aside.
+	f.queue = `[{"id":8,"seriesId":24,"status":"downloading","trackedDownloadState":"downloading","downloadId":"x","size":900,"sizeleft":300}]`
+	if got := checkSeasons(t, f, []int{2}); got.Status != StatusDownloading {
+		t.Fatalf("season 2 request status = %+v, want downloading", got)
+	}
+}
+
 // Progress covers only the request's seasons, and a season pack that Sonarr
 // lists under each of its episodes counts once.
 func TestCheckSeriesStatusReportsProgressForRequestedSeasons(t *testing.T) {
