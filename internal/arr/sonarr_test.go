@@ -13,7 +13,7 @@ func TestSubmitSeriesAddsLookupResult(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
 	var posted seriesResource
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Api-Key"); got != "sonarr-key" {
 			t.Fatalf("X-Api-Key = %q, want sonarr-key", got)
 		}
@@ -77,7 +77,7 @@ func TestSubmitSeriesAddsLookupResult(t *testing.T) {
 func TestSubmitSeriesAdoptsExistingSeries(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/series" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -109,7 +109,7 @@ func TestSubmitSeriesAdoptsExistingSeries(t *testing.T) {
 func TestSubmitSeriesFailsWhenPreflightFails(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/series" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -135,7 +135,7 @@ func TestSubmitSeriesRecoversWhenConcurrentAddWins(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
 	lookupCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/series":
 			if r.Method == http.MethodGet {
@@ -177,7 +177,7 @@ func TestSubmitSeriesRecoversWhenConcurrentAddWins(t *testing.T) {
 func TestSubmitSeriesPreservesPostErrorWhenRecoveryFindsNothing(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/series":
 			if r.Method == http.MethodGet {
@@ -212,7 +212,7 @@ func TestSubmitSeriesRecoversFromEmptyAddResponse(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
 	lookupCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/series/lookup":
 			w.Write([]byte(`[{"title":"Game of Thrones","tvdbId":121361,"titleSlug":"game-of-thrones"}]`))
@@ -266,7 +266,7 @@ func TestSubmitSeriesRecoversFromEmptyAddResponse(t *testing.T) {
 func TestSubmitSeriesRejectsNonExactTVDBLookupMatch(t *testing.T) {
 	qualityProfileID := 3
 	tvdbID := 121361
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/series":
 			w.Write([]byte(`[]`))
@@ -297,7 +297,7 @@ func TestSubmitSeriesRejectsNonExactTVDBLookupMatch(t *testing.T) {
 }
 
 func TestCheckSeriesStatusReadsQueueDetails(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Api-Key"); got != "sonarr-key" {
 			t.Fatalf("X-Api-Key = %q, want sonarr-key", got)
 		}
@@ -331,7 +331,7 @@ func TestCheckSeriesStatusReadsQueueDetails(t *testing.T) {
 
 // Every aired, monitored episode on disk with an empty queue means fulfilled.
 func TestCheckSeriesStatusCompletesWhenFullyImported(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/queue/details":
 			w.Write([]byte(`[]`))
@@ -360,7 +360,7 @@ func TestCheckSeriesStatusCompletesWhenFullyImported(t *testing.T) {
 // The queue empties between grabs, so a partially-downloaded series must not
 // complete — that would strand the remaining episodes.
 func TestCheckSeriesStatusStaysQueuedWhenPartiallyImported(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/queue/details":
 			w.Write([]byte(`[]`))
@@ -388,7 +388,7 @@ func TestCheckSeriesStatusStaysQueuedWhenPartiallyImported(t *testing.T) {
 
 // A freshly added series reports zero aired episodes; that is not completion.
 func TestCheckSeriesStatusStaysQueuedWithNoEpisodes(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/queue/details":
 			w.Write([]byte(`[]`))
@@ -415,7 +415,7 @@ func TestCheckSeriesStatusStaysQueuedWithNoEpisodes(t *testing.T) {
 }
 
 func TestListSeriesIntegrationOptionsLoadsChoices(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(sonarrV4(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Api-Key"); got != "sonarr-key" {
 			t.Fatalf("X-Api-Key = %q, want sonarr-key", got)
 		}
@@ -453,4 +453,16 @@ func TestListSeriesIntegrationOptionsLoadsChoices(t *testing.T) {
 	if len(options.Tags) != 1 || options.Tags[0].ID != 4 {
 		t.Fatalf("tags = %+v, want id 4", options.Tags)
 	}
+}
+
+// sonarrV4 serves a Sonarr v4 fake: like Sonarr v4, it answers 404 for the v5
+// API it does not have and passes every other request to handler.
+func sonarrV4(handler http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v5/") {
+			http.NotFound(w, r)
+			return
+		}
+		handler(w, r)
+	})
 }

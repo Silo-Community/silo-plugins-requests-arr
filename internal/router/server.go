@@ -230,6 +230,10 @@ func (s *Server) ListConfigOptions(ctx context.Context, req *pluginv1.ListConfig
 	for _, t := range opts.Tags {
 		tg.Options = append(tg.Options, &pluginv1.ConfigOption{Value: itoa(t.ID), Label: t.Label})
 	}
+	ml := &pluginv1.ConfigOptionList{}
+	for _, l := range opts.MetadataLanguages {
+		ml.Options = append(ml.Options, &pluginv1.ConfigOption{Value: itoa(l.ID), Label: l.Name})
+	}
 
 	return &pluginv1.ListConfigOptionsResponse{
 		OptionsByField: map[string]*pluginv1.ConfigOptionList{
@@ -239,6 +243,7 @@ func (s *Server) ListConfigOptions(ctx context.Context, req *pluginv1.ListConfig
 			"anime_quality_profile_id": qp,
 			"tags":                     tg,
 			"anime_tags":               tg,
+			"metadata_language":        ml,
 			"service_kind":             {Options: []*pluginv1.ConfigOption{{Value: kind, Label: label}}},
 		},
 	}, nil

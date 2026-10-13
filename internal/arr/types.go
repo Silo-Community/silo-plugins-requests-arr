@@ -61,7 +61,7 @@ type Instance struct {
 	AnimeRootFolder       string
 	AnimeQualityProfileID *int
 	AnimeTags             []int
-	Options               map[string]any // search_on_add, minimum_availability, series_type, season_folder, monitor
+	Options               map[string]any // search_on_add, minimum_availability, series_type, season_folder, monitor, metadata_language
 }
 
 type FulfillmentResult struct {
@@ -95,9 +95,18 @@ type IntegrationTag struct {
 	ID    int
 	Label string
 }
+
+// IntegrationLanguage is a language a Sonarr series can take its metadata in.
+type IntegrationLanguage struct {
+	ID   int
+	Name string
+}
 type IntegrationOptions struct {
 	Kind            string
 	RootFolders     []IntegrationRootFolder
 	QualityProfiles []IntegrationQualityProfile
 	Tags            []IntegrationTag
+	// MetadataLanguages is empty for Radarr and for Sonarr v4, which has no
+	// per-series metadata language.
+	MetadataLanguages []IntegrationLanguage
 }
