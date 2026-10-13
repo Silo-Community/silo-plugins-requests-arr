@@ -403,7 +403,14 @@ func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integ
 		// Downloads for seasons the request did not ask for are not its
 		// progress, and their failure is not its failure.
 		queues = slices.DeleteFunc(queues, func(q QueueResource) bool {
-			return q.SeasonNumber != nil && !slices.Contains(req.Seasons, *q.SeasonNumber)
+			if q.SeasonNumber == nil {
+				// Sonarr v5 lists a release it is holding back once, with no
+				// season, so it cannot be tied to the request; counting it
+				// would keep a finished season queued behind another season's
+				// delay.
+				return heldRelease(q)
+			}
+			return !slices.Contains(req.Seasons, *q.SeasonNumber)
 		})
 	}
 	// Imported episodes leave Sonarr's queue, so an empty queue alone cannot say

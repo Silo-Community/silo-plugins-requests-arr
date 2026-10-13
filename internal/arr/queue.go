@@ -154,12 +154,19 @@ func EvaluateProgress(resources []QueueResource) *Progress {
 	return progress
 }
 
+// heldRelease reports a queue item for a release the arr is holding back (a
+// delay profile, an unavailable download client) instead of downloading.
+func heldRelease(resource QueueResource) bool {
+	status := strings.TrimSpace(resource.Status)
+	return status == "delay" || status == "downloadClientUnavailable"
+}
+
 // downloadKey identifies the download a queue item belongs to: its downloadId,
 // else the release's title and size, else the queue item id. A release the arr
 // holds back (a delay profile, an unavailable download client) has no
-// downloadId yet, and Sonarr lists it once per episode under a different id,
-// with the same title and size. An item with none of these counts as its own
-// download.
+// downloadId yet, and Sonarr v4 lists it once per episode under a different
+// id, with the same title and size. An item with none of these counts as its
+// own download.
 func downloadKey(resource QueueResource, index int) string {
 	if id := strings.TrimSpace(resource.DownloadID); id != "" {
 		return "download:" + id
