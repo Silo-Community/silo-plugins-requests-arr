@@ -44,7 +44,7 @@
         {
           "key": "connection",
           "title": "Connection",
-          "json_schema": "{\"type\":\"object\",\"properties\":{\"service_kind\":{\"type\":\"string\"},\"root_folder\":{\"type\":\"string\"},\"quality_profile_id\":{\"type\":\"integer\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},\"is_default\":{\"type\":\"boolean\"},\"is_4k\":{\"type\":\"boolean\"},\"is_default_4k\":{\"type\":\"boolean\"},\"search_on_add\":{\"type\":\"boolean\"},\"monitor\":{\"type\":\"string\"},\"minimum_availability\":{\"type\":\"string\"},\"series_type\":{\"type\":\"string\"},\"season_folder\":{\"type\":\"boolean\"},\"anime_enabled\":{\"type\":\"boolean\"},\"anime_root_folder\":{\"type\":\"string\"},\"anime_quality_profile_id\":{\"type\":\"integer\"},\"anime_tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}}}",
+          "json_schema": "{\"type\":\"object\",\"properties\":{\"service_kind\":{\"type\":\"string\"},\"root_folder\":{\"type\":\"string\"},\"quality_profile_id\":{\"type\":\"integer\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}},\"is_default\":{\"type\":\"boolean\"},\"is_4k\":{\"type\":\"boolean\"},\"is_default_4k\":{\"type\":\"boolean\"},\"search_on_add\":{\"type\":\"boolean\"},\"monitor\":{\"type\":\"string\"},\"minimum_availability\":{\"type\":\"string\"},\"series_type\":{\"type\":\"string\"},\"season_folder\":{\"type\":\"boolean\"},\"metadata_language\":{\"type\":\"integer\"},\"anime_enabled\":{\"type\":\"boolean\"},\"anime_root_folder\":{\"type\":\"string\"},\"anime_quality_profile_id\":{\"type\":\"integer\"},\"anime_tags\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}}}",
           "admin_form": {
             "submit_label": "Save connection",
             "fields": [
@@ -227,6 +227,21 @@
                 ]
               },
               {
+                "key": "metadata_language",
+                "label": "Metadata language",
+                "description": "The language Sonarr fetches a new series' titles and descriptions in. Sonarr v5 and later; Sonarr v4 uses English.",
+                "control": "ADMIN_FORM_CONTROL_SELECT",
+                "dynamic_options": true,
+                "show_when": [
+                  {
+                    "field": "service_kind",
+                    "equals": [
+                      "sonarr"
+                    ]
+                  }
+                ]
+              },
+              {
                 "key": "anime_enabled",
                 "label": "Enable anime overrides",
                 "control": "ADMIN_FORM_CONTROL_SWITCH"
@@ -292,7 +307,8 @@
                   "monitor",
                   "minimum_availability",
                   "series_type",
-                  "season_folder"
+                  "season_folder",
+                  "metadata_language"
                 ]
               },
               {

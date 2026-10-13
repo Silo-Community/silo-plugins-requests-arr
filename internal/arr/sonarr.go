@@ -47,7 +47,15 @@ type seriesResource struct {
 	Tags             []int            `json:"tags,omitempty"`
 	Seasons          []seasonResource `json:"seasons,omitempty"`
 	MonitorNewItems  string           `json:"monitorNewItems,omitempty"`
-	AddOptions       addSeriesOptions `json:"addOptions,omitempty"`
+	// Language is the series' metadata language. Sonarr v4 has none and
+	// ignores it.
+	Language   *languageRef     `json:"language,omitempty"`
+	AddOptions addSeriesOptions `json:"addOptions,omitempty"`
+}
+
+// languageRef names a Sonarr language. Sonarr matches languages by id alone.
+type languageRef struct {
+	ID int `json:"id"`
 }
 
 // seasonResource is one entry of a Sonarr series' seasons list.
@@ -105,11 +113,16 @@ func (c *SonarrClient) ListSeriesIntegrationOptions(ctx context.Context, integra
 	if err != nil {
 		return nil, err
 	}
+	languages, err := ListMetadataLanguages(ctx, client)
+	if err != nil {
+		return nil, err
+	}
 	return &IntegrationOptions{
-		Kind:            "sonarr",
-		RootFolders:     rootFolders,
-		QualityProfiles: qualityProfiles,
-		Tags:            tags,
+		Kind:              "sonarr",
+		RootFolders:       rootFolders,
+		QualityProfiles:   qualityProfiles,
+		Tags:              tags,
+		MetadataLanguages: languages,
 	}, nil
 }
 
@@ -155,6 +168,9 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 	series.Monitored = BoolOption(integration.Options, "monitored", true)
 	series.SeriesType = StringOption(integration.Options, "series_type", "standard")
 	series.Tags = integration.Tags
+	if series.Language, err = metadataLanguage(ctx, client, integration); err != nil {
+		return FulfillmentResult{}, err
+	}
 	if len(req.Seasons) > 0 {
 		seasons, err := monitorOnlySeasons(series.Seasons, req.Seasons)
 		if err != nil {
@@ -359,6 +375,25 @@ func remarshal(from, to any) error {
 		return err
 	}
 	return json.Unmarshal(data, to)
+}
+
+// metadataLanguage is the language a new series takes its metadata in: the
+// connection's metadata_language, else Sonarr's preferred language. Sonarr v5
+// would otherwise add every series through the v3 API in English. It is nil
+// for Sonarr v4, which has no per-series language. The lookup stays in
+// English: Sonarr fetches the series again in its language when adding it.
+func metadataLanguage(ctx context.Context, client *httpclient.Client, integration Instance) (*languageRef, error) {
+	if id := IntOption(integration.Options, "metadata_language", 0); id > 0 {
+		return &languageRef{ID: id}, nil
+	}
+	preferred, ok, err := PreferredMetadataLanguage(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("sonarr: read the preferred metadata language: %w", err)
+	}
+	if !ok || preferred <= 0 {
+		return nil, nil
+	}
+	return &languageRef{ID: preferred}, nil
 }
 
 func joinInts(values []int) string {

@@ -2,6 +2,8 @@ package arr
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strconv"
 
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/httpclient"
@@ -22,6 +24,62 @@ type QualityProfileResource struct {
 type TagResource struct {
 	ID    int    `json:"id"`
 	Label string `json:"label"`
+}
+
+type LanguageResource struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// metadataSettingsResource is the part of Sonarr v5's
+// GET /api/v5/settings/metadata the plugin reads.
+type metadataSettingsResource struct {
+	PreferredMetadataLanguage int `json:"preferredMetadataLanguage"`
+}
+
+// PreferredMetadataLanguage returns the language Sonarr adds a series' metadata
+// in unless told otherwise. ok is false for Sonarr v4, which has no
+// per-series metadata language and answers 404 for the v5 API.
+func PreferredMetadataLanguage(ctx context.Context, client *httpclient.Client) (id int, ok bool, err error) {
+	var settings metadataSettingsResource
+	if err := client.GetJSON(ctx, "/api/v5/settings/metadata", &settings); err != nil {
+		var statusErr *httpclient.StatusError
+		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return settings.PreferredMetadataLanguage, true, nil
+}
+
+// ListMetadataLanguages returns the languages a Sonarr series can take its
+// metadata in, Sonarr's preferred one first, or none for Sonarr v4. The admin
+// form fills an empty choice with the first option, so a connection saved
+// without a choice keeps Sonarr's own default.
+func ListMetadataLanguages(ctx context.Context, client *httpclient.Client) ([]IntegrationLanguage, error) {
+	preferred, ok, err := PreferredMetadataLanguage(ctx, client)
+	if err != nil || !ok {
+		return nil, err
+	}
+	var resources []LanguageResource
+	if err := client.GetJSON(ctx, "/api/v3/language", &resources); err != nil {
+		return nil, err
+	}
+	out := make([]IntegrationLanguage, 0, len(resources))
+	for _, resource := range resources {
+		// Any, Original and Unknown (ids 0 and below) are not languages a
+		// series can be in; Sonarr's own add dialog leaves them out too.
+		if resource.ID <= 0 {
+			continue
+		}
+		language := IntegrationLanguage(resource)
+		if resource.ID == preferred {
+			out = append([]IntegrationLanguage{language}, out...)
+		} else {
+			out = append(out, language)
+		}
+	}
+	return out, nil
 }
 
 func ListRootFolders(ctx context.Context, client *httpclient.Client) ([]IntegrationRootFolder, error) {

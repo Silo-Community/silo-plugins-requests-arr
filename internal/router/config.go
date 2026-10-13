@@ -37,7 +37,7 @@ func instanceFromConnection(c *pluginv1.RouterConnection) arr.Instance {
 		Enabled: true,
 		Options: map[string]any{},
 	}
-	for _, k := range []string{"search_on_add", "minimum_availability", "series_type", "season_folder", "monitor"} {
+	for _, k := range []string{"search_on_add", "minimum_availability", "series_type", "season_folder", "monitor", "metadata_language"} {
 		if v, ok := cfg[k]; ok {
 			in.Options[k] = v
 		}

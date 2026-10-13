@@ -32,3 +32,19 @@ func StringOption(options map[string]any, key, fallback string) string {
 	}
 	return fallback
 }
+
+// IntOption reads an integer option. Config values arrive as JSON numbers
+// (float64); admin forms may store a select's choice as its string value.
+func IntOption(options map[string]any, key string, fallback int) int {
+	switch typed := options[key].(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}

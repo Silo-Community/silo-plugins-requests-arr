@@ -234,7 +234,7 @@ func (f *fakeSonarr) seasonMonitored() map[int]bool {
 
 func (f *fakeSonarr) submit(t *testing.T, seasons []int, options map[string]any) FulfillmentResult {
 	t.Helper()
-	server := httptest.NewServer(f)
+	server := httptest.NewServer(sonarrV4(f.ServeHTTP))
 	defer server.Close()
 	qualityProfileID := 3
 	tvdbID := f.tvdbID
@@ -414,7 +414,7 @@ func TestSubmitSeriesWholeSeriesUnchanged(t *testing.T) {
 func TestSubmitSeriesWithUnknownSeasonsFails(t *testing.T) {
 	for _, exists := range []bool{false, true} {
 		f := newFakeSonarr(t, exists, fakeSeason{Number: 1, Episodes: 5})
-		server := httptest.NewServer(f)
+		server := httptest.NewServer(sonarrV4(f.ServeHTTP))
 		qualityProfileID := 3
 		tvdbID := f.tvdbID
 		_, err := NewSonarrClient(server.Client()).SubmitSeries(context.Background(), Request{
@@ -432,7 +432,7 @@ func TestSubmitSeriesWithUnknownSeasonsFails(t *testing.T) {
 
 func checkSeasons(t *testing.T, f *fakeSonarr, seasons []int) FulfillmentStatus {
 	t.Helper()
-	server := httptest.NewServer(f)
+	server := httptest.NewServer(sonarrV4(f.ServeHTTP))
 	defer server.Close()
 	status, err := NewSonarrClient(server.Client()).CheckSeriesStatus(context.Background(), Request{
 		MediaType: MediaTypeSeries, ExternalID: "24", Seasons: seasons,

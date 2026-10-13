@@ -65,6 +65,24 @@ The setting is read only while a request has a failed download, so other
 status checks cost no extra call. A season request looks only at the
 downloads for its seasons.
 
+## Metadata language (Sonarr v5)
+
+Sonarr v5 keeps a metadata language for each series and fetches its titles
+and descriptions in that language. A Sonarr connection's Metadata language
+picks the language for the series the plugin adds, and a route can override
+it.
+
+- Without a choice, a new series gets Sonarr's own preferred metadata
+  language (Settings > Metadata Source). Sonarr v5 would otherwise add it in
+  English.
+- The admin form lists Sonarr's preferred language first and fills an empty
+  choice with it.
+- If Sonarr's preferred language cannot be read, the add fails and Silo
+  retries it, rather than adding the series in English.
+- A series Sonarr already has keeps its language.
+- Sonarr v4 has no per-series language: the setting offers no choices there
+  and the plugin sends none.
+
 ## Build
 
 ```sh
