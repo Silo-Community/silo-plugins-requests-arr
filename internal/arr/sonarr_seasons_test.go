@@ -179,9 +179,17 @@ func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("seriesId"); got != strconv.Itoa(f.seriesID) {
 			f.t.Fatalf("episode seriesId = %q", got)
 		}
-		var out []any
+		// The episode list of a series with 1,000+ episodes is larger than
+		// the plugin can read in one response, so reads name a season.
+		season := r.URL.Query().Get("seasonNumber")
+		if season == "" {
+			f.t.Fatalf("episode read without seasonNumber: %s", r.URL.String())
+		}
+		out := []any{}
 		for _, e := range f.episodes {
-			out = append(out, map[string]any{"id": e.ID, "seasonNumber": e.Season, "monitored": e.Monitored})
+			if season == strconv.Itoa(e.Season) {
+				out = append(out, map[string]any{"id": e.ID, "seasonNumber": e.Season, "monitored": e.Monitored})
+			}
 		}
 		write(out)
 	case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
