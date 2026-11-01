@@ -348,18 +348,22 @@ type episodeResource struct {
 }
 
 // monitorSeasonEpisodes monitors the unmonitored episodes of the requested
-// seasons.
+// seasons. It reads one season at a time: the whole episode list of a series
+// with 1,000+ episodes is too large to read in one response.
 func (c *SonarrClient) monitorSeasonEpisodes(ctx context.Context, client *httpclient.Client, seriesID int, requested []int) error {
 	values := url.Values{}
 	values.Set("seriesId", strconv.Itoa(seriesID))
-	var episodes []episodeResource
-	if err := client.GetJSON(ctx, "/api/v3/episode?"+values.Encode(), &episodes); err != nil {
-		return err
-	}
 	var ids []int
-	for _, episode := range episodes {
-		if !episode.Monitored && slices.Contains(requested, episode.SeasonNumber) {
-			ids = append(ids, episode.ID)
+	for _, seasonNumber := range requested {
+		values.Set("seasonNumber", strconv.Itoa(seasonNumber))
+		var episodes []episodeResource
+		if err := client.GetJSON(ctx, "/api/v3/episode?"+values.Encode(), &episodes); err != nil {
+			return err
+		}
+		for _, episode := range episodes {
+			if !episode.Monitored && episode.SeasonNumber == seasonNumber {
+				ids = append(ids, episode.ID)
+			}
 		}
 	}
 	if len(ids) == 0 {
