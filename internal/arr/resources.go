@@ -43,8 +43,7 @@ type metadataSettingsResource struct {
 func PreferredMetadataLanguage(ctx context.Context, client *httpclient.Client) (id int, ok bool, err error) {
 	var settings metadataSettingsResource
 	if err := client.GetJSON(ctx, "/api/v5/settings/metadata", &settings); err != nil {
-		var statusErr *httpclient.StatusError
-		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+		if isNotFound(err) {
 			return 0, false, nil
 		}
 		return 0, false, err
@@ -195,4 +194,24 @@ func statusFromQueue(ctx context.Context, client *httpclient.Client, kind string
 	status := StatusFromQueueEvaluation(kind, externalID, evaluation, false)
 	status.Progress = EvaluateProgress(queues)
 	return status
+}
+
+// isNotFound reports whether err is a 404 from the service.
+func isNotFound(err error) bool {
+	var statusErr *httpclient.StatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound
+}
+
+// removedStatus fails a target whose title the service no longer has: someone
+// deleted it there after Silo sent it, and every later check would 404 the
+// same way. Failing it lets an admin retry, which submits the title again, or
+// close the request; skipping it would leave the target queued forever.
+func removedStatus(kind string, externalID int, item string) FulfillmentStatus {
+	return FulfillmentStatus{
+		Status:          StatusFailed,
+		IntegrationKind: kind,
+		ExternalID:      strconv.Itoa(externalID),
+		ExternalStatus:  "not_found",
+		Message:         item + " no longer present in " + KindLabel(kind),
+	}
 }

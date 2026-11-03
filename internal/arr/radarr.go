@@ -161,6 +161,9 @@ func (c *RadarrClient) CheckMovieStatus(ctx context.Context, req Request, integr
 	// host never sees a target reach a terminal state.
 	if len(queues) == 0 {
 		movie, err := c.movieByID(ctx, client, movieID)
+		if isNotFound(err) {
+			return removedStatus("radarr", movieID, "movie"), nil
+		}
 		if err != nil {
 			return FulfillmentStatus{}, err
 		}
