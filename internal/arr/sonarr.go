@@ -461,6 +461,9 @@ func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integ
 	// counts only the episodes of its seasons.
 	if len(queues) == 0 {
 		series, err := c.seriesByID(ctx, client, seriesID)
+		if isNotFound(err) {
+			return removedStatus("sonarr", seriesID, "series"), nil
+		}
 		if err != nil {
 			return FulfillmentStatus{}, err
 		}

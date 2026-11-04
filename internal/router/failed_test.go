@@ -82,3 +82,61 @@ func TestCheckStatusReportsFailedDownloads(t *testing.T) {
 		}
 	}
 }
+
+// A title deleted from Sonarr or Radarr after Silo sent it 404s on every
+// check from then on, so its target fails with a message that says so and
+// the request can be retried or closed. Any other error stays skipped as
+// transient and leaves the target as it was.
+func TestCheckStatusFailsTargetsDeletedInArr(t *testing.T) {
+	arrServer := func(itemPath string, itemStatus int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v3/queue/details":
+				_, _ = w.Write([]byte(`[]`))
+			case itemPath:
+				http.Error(w, `{"message":"NotFound"}`, itemStatus)
+			default:
+				http.Error(w, "unexpected "+r.URL.String(), http.StatusTeapot)
+			}
+		}))
+	}
+	cases := []struct {
+		name, mediaType, itemPath string
+		itemStatus                int
+		wantFailed                bool
+		wantMessage               string
+	}{
+		{"series deleted in Sonarr", "series", "/api/v3/series/536", http.StatusNotFound, true, "series no longer present in Sonarr"},
+		{"movie deleted in Radarr", "movie", "/api/v3/movie/536", http.StatusNotFound, true, "movie no longer present in Radarr"},
+		{"Sonarr erroring", "series", "/api/v3/series/536", http.StatusInternalServerError, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := arrServer(tc.itemPath, tc.itemStatus)
+			defer srv.Close()
+			resp, err := New().CheckStatus(context.Background(), &pluginv1.CheckStatusRequest{
+				CapabilityId: "arr",
+				Request:      &pluginv1.RequestDescriptor{MediaType: tc.mediaType, ExternalIds: map[string]string{"tmdb": "550", "tvdb": "81189"}},
+				Targets:      []*pluginv1.TargetRef{{Quality: "1080p", ConnectionId: "arr", ExternalId: "536"}},
+				Connections:  []*pluginv1.RouterConnection{{Id: "arr", BaseUrl: srv.URL, ApiKey: "k"}},
+			})
+			if err != nil {
+				t.Fatalf("CheckStatus: %v", err)
+			}
+			statuses := resp.GetStatuses()
+			if !tc.wantFailed {
+				if len(statuses) != 0 {
+					t.Fatalf("statuses = %+v, want none", statuses)
+				}
+				return
+			}
+			if len(statuses) != 1 {
+				t.Fatalf("statuses = %+v, want 1", statuses)
+			}
+			st := statuses[0]
+			if st.GetStatus() != "failed" || st.GetMessage() != tc.wantMessage || st.GetQuality() != "1080p" || st.GetConnectionId() != "arr" {
+				t.Fatalf("status = %+v, want failed 1080p on arr with %q", st, tc.wantMessage)
+			}
+		})
+	}
+}
