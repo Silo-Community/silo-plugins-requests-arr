@@ -104,6 +104,11 @@ The plugin consumes the published
 [`silo-plugin-sdk`](https://github.com/Silo-Server/silo-plugin-sdk); CI rejects
 machine-local SDK replacement directives.
 
+## Releases
+
+Releases are signed with GitHub artifact attestations. [CONTRIBUTING.md](CONTRIBUTING.md#release)
+describes how maintainers cut a release and how to verify a downloaded binary.
+
 ## License
 
 Licensed under AGPL-3.0. See [`LICENSE`](LICENSE).
