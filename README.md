@@ -90,7 +90,8 @@ make build
 ```
 
 This produces a `plugin` binary. Use `make build-all` to cross-compile the
-release matrix (linux/amd64, linux/arm64, darwin/arm64) into `dist/`.
+release matrix (linux/amd64, linux/arm64, darwin/arm64, freebsd/amd64,
+freebsd/arm64) into `dist/`.
 
 ## Community maintenance
 
