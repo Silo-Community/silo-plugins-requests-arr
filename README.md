@@ -26,6 +26,20 @@ library is missing.
 - A request counts as complete when the aired, monitored episodes of its
   seasons are on disk; downloads for other seasons do not affect it.
 
+Silo numbers seasons as TMDB does, and Sonarr numbers some series
+differently: TMDB's one 24-episode season of DAN DA DAN is Sonarr's seasons 1
+and 2. When Silo sends a requested season's first air date and episode count,
+the plugin takes the first that many regular episodes Sonarr lists as airing
+from that date (a day earlier counts too, for time zones) and works on the
+Sonarr seasons that hold them: the season holding the first of those
+episodes, and any later one holding at least three of them, so an episode or
+two of disagreement does not add a whole season. A new series is then added
+with nothing monitored; once Sonarr has finished adding it (the plugin waits
+up to 20 seconds), the matched seasons are monitored and searched. If Sonarr
+takes longer, the plugin reports a temporary failure, and Silo retries the
+submission a few minutes later and matches the series then. A season without a date or count, or whose
+episodes Sonarr does not list, is matched by number.
+
 The connection's Monitor policy applies only to whole-series requests. Radarr
 ignores seasons.
 

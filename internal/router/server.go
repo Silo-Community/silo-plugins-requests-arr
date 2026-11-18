@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -44,6 +45,11 @@ func descriptorToRequest(d *pluginv1.RequestDescriptor) arr.Request {
 	}
 	if r.MediaType == arr.MediaTypeSeries {
 		r.Seasons = requestedSeasons(d.GetSeasons())
+		for _, s := range d.GetSeasonDetails() {
+			r.SeasonDetails = append(r.SeasonDetails, arr.SeasonDetail{
+				Number: int(s.GetNumber()), FirstAirDate: s.GetFirstAirDate(), EpisodeCount: int(s.GetEpisodeCount()),
+			})
+		}
 	}
 	return r
 }
@@ -96,6 +102,11 @@ func (s *Server) Fulfill(ctx context.Context, req *pluginv1.FulfillRequest) (*pl
 	for _, pt := range planned {
 		resolved := arr.ResolveInstance(pt)
 		result, err := submit(ctx, r, resolved)
+		if errors.Is(err, arr.ErrStillAdding) {
+			// A failed target is final; a failed call is retried, and the
+			// retry adopts the series once Sonarr has finished adding it.
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
 		t := &pluginv1.FulfillmentTarget{
 			Quality:      pt.Quality,
 			ConnectionId: resolved.ID,

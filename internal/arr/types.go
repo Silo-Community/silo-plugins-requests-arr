@@ -40,8 +40,21 @@ type Request struct {
 	IsAnime   bool
 	// Seasons are the season numbers a series request asks for, sorted and
 	// without duplicates; 0 is Specials and none means the whole series.
-	Seasons    []int
-	ExternalID string // set by CheckStatus probes
+	Seasons []int
+	// SeasonDetails describe the requested seasons as the host numbers them
+	// (TMDB): see SeasonDetail. Empty when the host sent none.
+	SeasonDetails []SeasonDetail
+	ExternalID    string // set by CheckStatus probes
+}
+
+// SeasonDetail is one requested season as the host numbers it. Sonarr splits
+// or merges some series' seasons differently, so the season is matched as
+// the first EpisodeCount regular episodes airing on or after FirstAirDate;
+// without a date or count it is matched by Number.
+type SeasonDetail struct {
+	Number       int
+	FirstAirDate string // YYYY-MM-DD
+	EpisodeCount int
 }
 
 // Instance is one resolved arr connection: generic host fields plus the parsed plugin_config.

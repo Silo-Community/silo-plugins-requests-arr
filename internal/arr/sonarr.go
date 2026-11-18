@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/httpclient"
 )
@@ -31,6 +32,10 @@ func IsSeriesMonitorPolicy(policy string) bool {
 
 type SonarrClient struct {
 	httpClient *http.Client
+	// addPoll and addWait pace the wait for Sonarr to finish adding a series
+	// (see waitUntilAdded); zero means the defaults.
+	addPoll time.Duration
+	addWait time.Duration
 }
 
 type seriesResource struct {
@@ -79,6 +84,9 @@ type seriesStatusResource struct {
 	ID         int                    `json:"id,omitempty"`
 	Statistics seriesStatisticsSubset `json:"statistics"`
 	Seasons    []seasonResource       `json:"seasons"`
+	// AddOptions is set until Sonarr has finished adding the series (its
+	// refresh, disk scan and post-add handling).
+	AddOptions *struct{} `json:"addOptions"`
 }
 
 type seriesStatisticsSubset struct {
@@ -132,7 +140,9 @@ func (c *SonarrClient) ListSeriesIntegrationOptions(ctx context.Context, integra
 // A request for the whole series (no seasons) adds it under the connection's
 // monitor policy and adopts an existing series as it is. A request that names
 // seasons acquires only those: a new series is added with only the requested
-// seasons monitored, and an existing one has the requested seasons monitored
+// seasons monitored (with TMDB air dates, it is added with none and the
+// matched seasons are monitored once Sonarr has finished adding it; see
+// sonarr_season_match.go), and an existing one has the requested seasons monitored
 // and searched while its other seasons are left as they are. The requested
 // seasons replace the monitor policy, which would otherwise pick seasons of
 // its own. Repeating a request converges: seasons already monitored stay so,
@@ -171,7 +181,20 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 	if series.Language, err = metadataLanguage(ctx, client, integration); err != nil {
 		return FulfillmentResult{}, err
 	}
-	if len(req.Seasons) > 0 {
+	byAirDate := datedSeasons(req)
+	if byAirDate {
+		// Sonarr lists the episodes to match only after it adds the series,
+		// so it is added with nothing monitored or searched and its seasons
+		// are monitored once matched (see adoptSeries).
+		seasons := make([]seasonResource, 0, len(series.Seasons))
+		for _, season := range series.Seasons {
+			seasons = append(seasons, seasonResource{SeasonNumber: season.SeasonNumber})
+		}
+		series.Monitored = true
+		series.Seasons = seasons
+		series.MonitorNewItems = "none"
+		series.AddOptions = addSeriesOptions{}
+	} else if len(req.Seasons) > 0 {
 		seasons, err := monitorOnlySeasons(series.Seasons, req.Seasons)
 		if err != nil {
 			return FulfillmentResult{}, err
@@ -215,9 +238,15 @@ func (c *SonarrClient) SubmitSeries(ctx context.Context, req Request, integratio
 		// series' Sonarr ID by listing series filtered by TVDB ID; without the
 		// ID the reconcile loop cannot advance the request.
 		if existing, found, lookupErr := c.findSeriesByTVDBID(ctx, client, *req.TVDBID); lookupErr == nil && found {
+			if byAirDate {
+				return c.adoptSeries(ctx, client, existing, req, integration)
+			}
 			return resultFromSeries(existing), nil
 		}
 		return AcceptedWithoutResponse("sonarr"), nil
+	}
+	if byAirDate {
+		return c.adoptSeries(ctx, client, created, req, integration)
 	}
 	return resultFromSeries(created), nil
 }
@@ -254,12 +283,25 @@ func noRequestedSeasonError(requested []int) error {
 
 // adoptSeries takes over a series Sonarr already has. A whole-series request
 // adopts it unchanged. A season request adds the requested seasons to what the
-// series monitors and searches them.
+// series monitors and searches them. One matched by air date waits until
+// Sonarr has finished adding the series (see waitUntilAdded), which it may
+// still be doing: just added, or added by an attempt whose answer was lost.
 func (c *SonarrClient) adoptSeries(ctx context.Context, client *httpclient.Client, existing seriesResource, req Request, integration Instance) (FulfillmentResult, error) {
 	if len(req.Seasons) == 0 {
 		return resultFromSeries(existing), nil
 	}
-	if err := c.addSeasons(ctx, client, existing.ID, req.Seasons, searchOnAdd(integration)); err != nil {
+	if datedSeasons(req) {
+		added, err := c.waitUntilAdded(ctx, client, existing.ID)
+		if err != nil {
+			return FulfillmentResult{}, err
+		}
+		existing.Seasons = added
+	}
+	seasons, err := c.sonarrSeasons(ctx, client, existing.ID, existing.Seasons, req)
+	if err != nil {
+		return FulfillmentResult{}, err
+	}
+	if err := c.addSeasons(ctx, client, existing.ID, seasons, searchOnAdd(integration)); err != nil {
 		return FulfillmentResult{}, err
 	}
 	return resultFromSeries(existing), nil
@@ -342,22 +384,21 @@ func (c *SonarrClient) addSeasons(ctx context.Context, client *httpclient.Client
 }
 
 type episodeResource struct {
-	ID           int  `json:"id"`
-	SeasonNumber int  `json:"seasonNumber"`
-	Monitored    bool `json:"monitored"`
+	ID            int    `json:"id"`
+	SeasonNumber  int    `json:"seasonNumber"`
+	EpisodeNumber int    `json:"episodeNumber"`
+	Monitored     bool   `json:"monitored"`
+	AirDate       string `json:"airDate"`
 }
 
 // monitorSeasonEpisodes monitors the unmonitored episodes of the requested
 // seasons. It reads one season at a time: the whole episode list of a series
 // with 1,000+ episodes is too large to read in one response.
 func (c *SonarrClient) monitorSeasonEpisodes(ctx context.Context, client *httpclient.Client, seriesID int, requested []int) error {
-	values := url.Values{}
-	values.Set("seriesId", strconv.Itoa(seriesID))
 	var ids []int
 	for _, seasonNumber := range requested {
-		values.Set("seasonNumber", strconv.Itoa(seasonNumber))
-		var episodes []episodeResource
-		if err := client.GetJSON(ctx, "/api/v3/episode?"+values.Encode(), &episodes); err != nil {
+		episodes, err := seasonEpisodes(ctx, client, seriesID, seasonNumber)
+		if err != nil {
 			return err
 		}
 		for _, episode := range episodes {
@@ -434,6 +475,21 @@ func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integ
 		}, nil
 	}
 
+	var series *seriesStatusResource
+	if datedSeasons(req) {
+		// Count the Sonarr seasons that hold the requested episodes.
+		read, err := c.seriesByID(ctx, client, seriesID)
+		if isNotFound(err) {
+			return removedStatus("sonarr", seriesID, "series"), nil
+		}
+		if err != nil {
+			return FulfillmentStatus{}, err
+		}
+		series = &read
+		if req.Seasons, err = c.sonarrSeasons(ctx, client, seriesID, series.Seasons, req); err != nil {
+			return FulfillmentStatus{}, err
+		}
+	}
 	queues, err := c.queueDetails(ctx, client, seriesID)
 	if err != nil {
 		return FulfillmentStatus{}, err
@@ -460,12 +516,15 @@ func (c *SonarrClient) CheckSeriesStatus(ctx context.Context, req Request, integ
 	// completing there would strand a half-downloaded series. A season request
 	// counts only the episodes of its seasons.
 	if len(queues) == 0 {
-		series, err := c.seriesByID(ctx, client, seriesID)
-		if isNotFound(err) {
-			return removedStatus("sonarr", seriesID, "series"), nil
-		}
-		if err != nil {
-			return FulfillmentStatus{}, err
+		if series == nil {
+			read, err := c.seriesByID(ctx, client, seriesID)
+			if isNotFound(err) {
+				return removedStatus("sonarr", seriesID, "series"), nil
+			}
+			if err != nil {
+				return FulfillmentStatus{}, err
+			}
+			series = &read
 		}
 		stats := series.Statistics
 		if len(req.Seasons) > 0 {

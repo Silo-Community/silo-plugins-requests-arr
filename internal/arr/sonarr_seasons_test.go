@@ -3,6 +3,7 @@ package arr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -21,12 +22,16 @@ type fakeSeason struct {
 	Monitored bool
 	Episodes  int
 	Files     int
+	// FirstAired dates the season's first episode (YYYY-MM-DD); the rest air
+	// weekly after it. Empty leaves the episodes undated.
+	FirstAired string
 }
 
 type fakeEpisode struct {
 	ID        int
 	Season    int
 	Monitored bool
+	AirDate   string
 }
 
 // fakeSonarr is a small stateful Sonarr v4 for season requests: it applies
@@ -44,6 +49,11 @@ type fakeSonarr struct {
 	queue     string
 	// downloadClientConfig answers GET /api/v3/config/downloadclient.
 	downloadClientConfig string
+	// refreshPolls is how many series reads after an add still show its
+	// addOptions, the way Sonarr keeps them until its refresh, disk scan and
+	// add handling of a new series end. Until then episode reads answer
+	// empty.
+	refreshPolls int
 
 	posted       map[string]any
 	configReads  int
@@ -72,9 +82,14 @@ func (f *fakeSonarr) resetEpisodes() {
 	f.episodes = nil
 	id := 100
 	for _, s := range f.seasons {
-		for range s.Episodes {
+		first, _ := time.Parse(time.DateOnly, s.FirstAired)
+		for n := range s.Episodes {
 			id++
-			f.episodes = append(f.episodes, fakeEpisode{ID: id, Season: s.Number, Monitored: s.Monitored})
+			e := fakeEpisode{ID: id, Season: s.Number, Monitored: s.Monitored}
+			if s.FirstAired != "" {
+				e.AirDate = first.AddDate(0, 0, 7*n).Format(time.DateOnly)
+			}
+			f.episodes = append(f.episodes, e)
 		}
 	}
 }
@@ -99,12 +114,16 @@ func (f *fakeSonarr) seriesJSON() map[string]any {
 			"seasonNumber": s.Number, "monitored": s.Monitored, "statistics": f.statistics(s),
 		})
 	}
-	return map[string]any{
+	series := map[string]any{
 		"id": f.seriesID, "tvdbId": f.tvdbID, "title": "Game of Thrones", "monitored": f.monitored,
 		"seasons": seasons,
 		// Fields the plugin does not model must survive a read-modify-write.
 		"path": "/tv/Game of Thrones", "qualityProfileId": 7, "monitorNewItems": "all",
 	}
+	if f.refreshPolls > 0 {
+		series["addOptions"] = map[string]any{"searchForMissingEpisodes": false}
+	}
+	return series
 }
 
 func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +172,9 @@ func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write(map[string]any{"id": f.seriesID, "tvdbId": f.tvdbID})
 	case r.Method == http.MethodGet && f.seriesID != 0 && r.URL.Path == seriesPath:
 		write(f.seriesJSON())
+		if f.refreshPolls > 0 {
+			f.refreshPolls--
+		}
 	case r.Method == http.MethodPut && f.seriesID != 0 && r.URL.Path == seriesPath:
 		body := decode()
 		f.puts = append(f.puts, body)
@@ -186,9 +208,17 @@ func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.t.Fatalf("episode read without seasonNumber: %s", r.URL.String())
 		}
 		out := []any{}
+		if f.refreshPolls > 0 {
+			write(out)
+			return
+		}
 		for _, e := range f.episodes {
 			if season == strconv.Itoa(e.Season) {
-				out = append(out, map[string]any{"id": e.ID, "seasonNumber": e.Season, "monitored": e.Monitored})
+				episode := map[string]any{"id": e.ID, "seasonNumber": e.Season, "monitored": e.Monitored}
+				if e.AirDate != "" {
+					episode["airDate"] = e.AirDate
+				}
+				out = append(out, episode)
 			}
 		}
 		write(out)
@@ -242,23 +272,15 @@ func (f *fakeSonarr) seasonMonitored() map[int]bool {
 
 func (f *fakeSonarr) submit(t *testing.T, seasons []int, options map[string]any) FulfillmentResult {
 	t.Helper()
+	return f.submitRequest(t, Request{Seasons: seasons}, options)
+}
+
+// submitRequest submits req for the fake's series.
+func (f *fakeSonarr) submitRequest(t *testing.T, req Request, options map[string]any) FulfillmentResult {
+	t.Helper()
 	server := httptest.NewServer(sonarrV4(f.ServeHTTP))
 	defer server.Close()
-	qualityProfileID := 3
-	tvdbID := f.tvdbID
-	result, err := NewSonarrClient(server.Client()).SubmitSeries(context.Background(), Request{
-		MediaType: MediaTypeSeries,
-		TVDBID:    &tvdbID,
-		Title:     "Game of Thrones",
-		Seasons:   seasons,
-	}, Instance{
-		Kind:             "sonarr",
-		BaseURL:          server.URL,
-		APIKeyRef:        "sonarr-key",
-		RootFolder:       "/series",
-		QualityProfileID: &qualityProfileID,
-		Options:          options,
-	})
+	result, err := f.submitWith(server, req, options)
 	if err != nil {
 		t.Fatalf("SubmitSeries returned error: %v", err)
 	}
@@ -266,6 +288,24 @@ func (f *fakeSonarr) submit(t *testing.T, seasons []int, options map[string]any)
 		t.Fatalf("result = %+v, want Sonarr series 24", result)
 	}
 	return result
+}
+
+// submitWith submits req to the fake behind server, polling for Sonarr to
+// finish adding a new series every millisecond for up to 50ms.
+func (f *fakeSonarr) submitWith(server *httptest.Server, req Request, options map[string]any) (FulfillmentResult, error) {
+	qualityProfileID := 3
+	tvdbID := f.tvdbID
+	req.MediaType, req.TVDBID, req.Title = MediaTypeSeries, &tvdbID, "Game of Thrones"
+	client := NewSonarrClient(server.Client())
+	client.addPoll, client.addWait = time.Millisecond, 50*time.Millisecond
+	return client.SubmitSeries(context.Background(), req, Instance{
+		Kind:             "sonarr",
+		BaseURL:          server.URL,
+		APIKeyRef:        "sonarr-key",
+		RootFolder:       "/series",
+		QualityProfileID: &qualityProfileID,
+		Options:          options,
+	})
 }
 
 func fourSeasons() []fakeSeason {
@@ -440,11 +480,16 @@ func TestSubmitSeriesWithUnknownSeasonsFails(t *testing.T) {
 
 func checkSeasons(t *testing.T, f *fakeSonarr, seasons []int) FulfillmentStatus {
 	t.Helper()
+	return checkRequest(t, f, Request{Seasons: seasons})
+}
+
+// checkRequest checks req's status against the fake's series 24.
+func checkRequest(t *testing.T, f *fakeSonarr, req Request) FulfillmentStatus {
+	t.Helper()
 	server := httptest.NewServer(sonarrV4(f.ServeHTTP))
 	defer server.Close()
-	status, err := NewSonarrClient(server.Client()).CheckSeriesStatus(context.Background(), Request{
-		MediaType: MediaTypeSeries, ExternalID: "24", Seasons: seasons,
-	}, Instance{Kind: "sonarr", BaseURL: server.URL, APIKeyRef: "sonarr-key"})
+	req.MediaType, req.ExternalID = MediaTypeSeries, "24"
+	status, err := NewSonarrClient(server.Client()).CheckSeriesStatus(context.Background(), req, Instance{Kind: "sonarr", BaseURL: server.URL, APIKeyRef: "sonarr-key"})
 	if err != nil {
 		t.Fatalf("CheckSeriesStatus: %v", err)
 	}
@@ -581,5 +626,155 @@ func TestCheckSeriesStatusReportsProgressForRequestedSeasons(t *testing.T) {
 				t.Fatalf("estimated completion = %v, want %v", got.EstimatedCompletion, eta)
 			}
 		})
+	}
+}
+
+// splitCour is a series TMDB files as one 24-episode season and Sonarr as two
+// 12-episode seasons, the way DAN DA DAN is.
+func splitCour(t *testing.T, exists bool) *fakeSonarr {
+	return newFakeSonarr(t, exists,
+		fakeSeason{Number: 0, Episodes: 2, FirstAired: "2024-09-01"},
+		fakeSeason{Number: 1, Episodes: 12, FirstAired: "2024-10-04"},
+		fakeSeason{Number: 2, Episodes: 12, FirstAired: "2025-07-04"},
+		fakeSeason{Number: 3, Episodes: 12, FirstAired: "2027-01-08"},
+	)
+}
+
+// tmdbSeasonOne is a request for TMDB's season 1: 24 episodes from
+// 2024-10-03, a day before Sonarr dates the first one, as when the two sit
+// in different time zones.
+var tmdbSeasonOne = Request{Seasons: []int{1}, SeasonDetails: []SeasonDetail{{Number: 1, FirstAirDate: "2024-10-03", EpisodeCount: 24}}}
+
+// A season request with TMDB's air dates and episode counts gets the same
+// episodes on Sonarr when Sonarr numbers the seasons differently, for a new
+// series and one Sonarr already has. A new series lists no episodes until
+// Sonarr's refresh ends, so it is added with nothing monitored and the
+// seasons are monitored and searched once the episodes appear.
+func TestSubmitSeriesMatchesSeasonsByAirDate(t *testing.T) {
+	for _, exists := range []bool{false, true} {
+		f := splitCour(t, exists)
+		if !exists {
+			f.refreshPolls = 2
+		}
+		f.submitRequest(t, tmdbSeasonOne, map[string]any{"search_on_add": true})
+
+		want := map[int]bool{0: false, 1: true, 2: true, 3: false}
+		if got := f.seasonMonitored(); !maps.Equal(got, want) {
+			t.Fatalf("exists %v: monitored seasons = %v, want %v", exists, got, want)
+		}
+		if got := f.searchedSeasons(); !slices.Equal(got, []int{1, 2}) {
+			t.Fatalf("exists %v: searched seasons = %v, want [1 2]", exists, got)
+		}
+		if !exists && f.posted["addOptions"].(map[string]any)["searchForMissingEpisodes"] != false {
+			t.Fatalf("add searched before the seasons were known: %v", f.posted["addOptions"])
+		}
+	}
+}
+
+// Without usable details (no date, no count, or no matching episodes) a
+// season is matched by number, as before.
+func TestSubmitSeriesFallsBackToSeasonNumbers(t *testing.T) {
+	for name, detail := range map[string]SeasonDetail{
+		"no date":     {Number: 2, EpisodeCount: 12},
+		"no count":    {Number: 2, FirstAirDate: "2025-07-04"},
+		"not on file": {Number: 2, FirstAirDate: "2030-01-01", EpisodeCount: 12},
+	} {
+		f := splitCour(t, true)
+		f.submitRequest(t, Request{Seasons: []int{2}, SeasonDetails: []SeasonDetail{detail}}, nil)
+		if got := f.seasonMonitored(); !maps.Equal(got, map[int]bool{0: false, 1: false, 2: true, 3: false}) {
+			t.Fatalf("%s: monitored seasons = %v, want only 2", name, got)
+		}
+	}
+}
+
+// Completion of a season request matched by air date counts the Sonarr
+// seasons it maps to.
+func TestCheckSeriesStatusMatchesSeasonsByAirDate(t *testing.T) {
+	f := splitCour(t, true)
+	f.seasons[1].Monitored, f.seasons[1].Files = true, 12
+	f.seasons[2].Monitored, f.seasons[2].Files = true, 5
+	f.resetEpisodes()
+	if got := checkRequest(t, f, tmdbSeasonOne); got.Status != StatusQueued {
+		t.Fatalf("status = %+v, want queued while Sonarr season 2 is missing episodes", got)
+	}
+	f.seasons[2].Files = 12
+	if got := checkRequest(t, f, tmdbSeasonOne); got.Status != StatusCompleted {
+		t.Fatalf("status = %+v, want completed", got)
+	}
+}
+
+// A season is matched to the Sonarr seasons that hold a real share of its
+// episodes: one extra TMDB episode, or a premiere Sonarr dates a week
+// earlier, does not pull in the whole next Sonarr season.
+func TestSubmitSeriesKeepsSmallMismatchesInsideTheSeason(t *testing.T) {
+	for name, detail := range map[string]SeasonDetail{
+		"one episode more":      {Number: 1, FirstAirDate: "2024-10-04", EpisodeCount: 13},
+		"premiere a week later": {Number: 1, FirstAirDate: "2024-10-11", EpisodeCount: 12},
+	} {
+		f := splitCour(t, true)
+		f.submitRequest(t, Request{Seasons: []int{1}, SeasonDetails: []SeasonDetail{detail}}, nil)
+		if got := f.seasonMonitored(); !maps.Equal(got, map[int]bool{0: false, 1: true, 2: false, 3: false}) {
+			t.Fatalf("%s: monitored seasons = %v, want only 1", name, got)
+		}
+	}
+}
+
+// When Sonarr has not finished adding a new series within the wait, the
+// submission fails rather than guessing by number, and the host's retry
+// finds the series and matches it by air date.
+func TestSubmitSeriesRetriesWhenSonarrIsStillAddingTheSeries(t *testing.T) {
+	f := splitCour(t, false)
+	f.refreshPolls = 1 << 20
+	server := httptest.NewServer(sonarrV4(f.ServeHTTP))
+	defer server.Close()
+	if _, err := f.submitWith(server, tmdbSeasonOne, map[string]any{"search_on_add": true}); !errors.Is(err, ErrStillAdding) {
+		t.Fatalf("SubmitSeries error = %v, want ErrStillAdding", err)
+	}
+	if got := f.seasonMonitored(); !maps.Equal(got, map[int]bool{0: false, 1: false, 2: false, 3: false}) {
+		t.Fatalf("monitored seasons = %v after the failed wait, want none", got)
+	}
+	f.refreshPolls = 0
+	f.submitRequest(t, tmdbSeasonOne, map[string]any{"search_on_add": true})
+	if got := f.seasonMonitored(); !maps.Equal(got, map[int]bool{0: false, 1: true, 2: true, 3: false}) {
+		t.Fatalf("monitored seasons = %v after the retry, want 1 and 2", got)
+	}
+}
+
+// A series Sonarr is still adding when the request arrives (a retry, or a
+// lost add response) is matched only once Sonarr has finished adding it.
+func TestSubmitSeriesWaitsForASeriesSonarrIsStillAdding(t *testing.T) {
+	f := splitCour(t, true)
+	f.refreshPolls = 2
+	f.submitRequest(t, tmdbSeasonOne, map[string]any{"search_on_add": true})
+	if got := f.seasonMonitored(); !maps.Equal(got, map[int]bool{0: false, 1: true, 2: true, 3: false}) {
+		t.Fatalf("monitored seasons = %v, want 1 and 2", got)
+	}
+}
+
+// A later Sonarr season counts once at least three of the requested
+// episodes fall in it, whatever its size: one stray episode in a season
+// Sonarr has barely listed stays out, and half of a long one comes in.
+func TestSubmitSeriesCountsALaterSeasonFromThreeEpisodes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		seasons []fakeSeason
+		detail  SeasonDetail
+		want    map[int]bool
+	}{
+		"stray premiere of an announced season": {
+			seasons: []fakeSeason{{Number: 1, Episodes: 12, FirstAired: "2024-10-04"}, {Number: 2, Episodes: 1, FirstAired: "2025-07-04"}},
+			detail:  SeasonDetail{Number: 1, FirstAirDate: "2024-10-04", EpisodeCount: 13},
+			want:    map[int]bool{1: true, 2: false},
+		},
+		"twelve of a 25-episode season": {
+			seasons: []fakeSeason{{Number: 1, Episodes: 24, FirstAired: "2023-10-22"}, {Number: 2, Episodes: 25, FirstAired: "2024-04-21"}},
+			detail:  SeasonDetail{Number: 1, FirstAirDate: "2023-10-22", EpisodeCount: 36},
+			want:    map[int]bool{1: true, 2: true},
+		},
+	} {
+		f := newFakeSonarr(t, true, tc.seasons...)
+		f.submitRequest(t, Request{Seasons: []int{1}, SeasonDetails: []SeasonDetail{tc.detail}}, nil)
+		if got := f.seasonMonitored(); !maps.Equal(got, tc.want) {
+			t.Fatalf("%s: monitored seasons = %v, want %v", name, got, tc.want)
+		}
 	}
 }
